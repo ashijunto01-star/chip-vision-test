@@ -429,10 +429,12 @@ function loadEndpoint(){
     if(saved){ document.getElementById('endpointInput').value = saved; }
     const savedSecret = localStorage.getItem('chipvision_secret');
     if(savedSecret){ document.getElementById('secretInput').value = savedSecret; }
+    const savedDevice = localStorage.getItem('chip_test_device');
+    if(savedDevice){ document.getElementById('tag-device').value = savedDevice; }
   }catch(e){}
 }
 loadEndpoint();
-loadTrials();
+loadTrialsFromServer();
 
 // ---- 数値フォーマット系(3桁区切り + 0クリア済み入力) ----
 function formatNum(n){
@@ -933,7 +935,7 @@ function renderScoringInputs(parsed){
   document.getElementById('qualityIssueFlag').checked = false;
 }
 
-function scoreTrial(){
+async function scoreTrial(){
   const parsed = window._lastParsed;
   let colorMatchCount = 0;
   let countErrors = [];
@@ -965,69 +967,116 @@ function scoreTrial(){
   const deviceName = document.getElementById('tag-device').value.trim();
   try{ localStorage.setItem('chip_test_device', deviceName); }catch(e){}
 
-  const score = {
-    time: new Date().toLocaleString('ja-JP'),
-    elapsed: window._lastElapsed,
-    mae,
-    moneyErrorPct,
-    corrections: correctionCount,
-    hadWarning,
-    hadQualityIssue,
-    colorAccuracy: countErrors.length ? (colorMatchCount / countErrors.length * 100) : null,
+  const trial = {
     device: deviceName,
     lux: document.getElementById('tag-lux').value.trim(),
-    distanceCm: document.getElementById('tag-distance').value.trim(),
+    distance_cm: document.getElementById('tag-distance').value.trim(),
     angle: document.getElementById('tag-angle').value,
     arrangement: document.getElementById('tag-arrangement').value,
     placement: document.getElementById('tag-placement').value,
     background: document.getElementById('tag-background').value,
     shadow: document.getElementById('tag-shadow').value,
     blur: document.getElementById('tag-blur').value,
-    darkModeEnabled: document.getElementById('darkModeToggle').checked,
-    usedRefImages: window._lastUsedRefCount > 0,
-    warningDetail: (window._lastWarnings || []).join(' / '),
-    recognizedDetail: parsed.map(p => `${p.color}:${p.count}`).join(' / ')
+    dark_mode_enabled: document.getElementById('darkModeToggle').checked,
+    used_ref_images: window._lastUsedRefCount > 0,
+    elapsed_sec: window._lastElapsed,
+    mae: mae,
+    money_error_pct: moneyErrorPct,
+    color_accuracy: countErrors.length ? (colorMatchCount / countErrors.length * 100) : null,
+    corrections: correctionCount,
+    had_warning: hadWarning,
+    had_quality_issue: hadQualityIssue,
+    warning_detail: (window._lastWarnings || []).join(' / '),
+    recognized_detail: parsed.map(p => `${p.color}:${p.count}`).join(' / ')
   };
-  trialScores.push(score);
-  persistTrials();
 
   const resultBox = document.getElementById('scoreResult');
   resultBox.style.display = 'block';
-  resultBox.innerHTML = `
-    <div style="font-family:var(--mono); font-size:13px; line-height:1.8;">
-      枚数誤差(MAE): ${mae !== null ? mae.toFixed(2) + '枚' : '(未入力)'}<br>
-      金額誤差率: ${moneyErrorPct.toFixed(2)}%<br>
-      修正タップ数: ${correctionCount}回<br>
-      レイテンシ: ${window._lastElapsed}秒<br>
-      警告発火: ${hadWarning ? 'あり' : 'なし'} / 実際に問題あり(自己申告): ${hadQualityIssue ? 'あり' : 'なし'}
-    </div>
-  `;
+  resultBox.innerHTML = `<div style="font-family:var(--mono); font-size:13px;">共有データベースに保存中...</div>`;
 
-  renderAggregate();
-}
-
-function persistTrials(){
-  try{ localStorage.setItem('chip_test_trials', JSON.stringify(trialScores)); }catch(e){}
-}
-function loadTrials(){
   try{
-    const saved = localStorage.getItem('chip_test_trials');
-    if(saved){ trialScores = JSON.parse(saved); }
-    const savedDevice = localStorage.getItem('chip_test_device');
-    if(savedDevice){ document.getElementById('tag-device').value = savedDevice; }
-  }catch(e){}
-  if(trialScores.length > 0) renderAggregate();
+    await saveTrialToServer(trial);
+    resultBox.innerHTML = `
+      <div style="font-family:var(--mono); font-size:13px; line-height:1.8;">
+        枚数誤差(MAE): ${mae !== null ? mae.toFixed(2) + '枚' : '(未入力)'}<br>
+        金額誤差率: ${moneyErrorPct.toFixed(2)}%<br>
+        修正タップ数: ${correctionCount}回<br>
+        レイテンシ: ${window._lastElapsed}秒<br>
+        警告発火: ${hadWarning ? 'あり' : 'なし'} / 実際に問題あり(自己申告): ${hadQualityIssue ? 'あり' : 'なし'}<br>
+        <span style="color:var(--felt-bright)">✓ 共有データベースに保存しました</span>
+      </div>
+    `;
+    await loadTrialsFromServer();
+  }catch(err){
+    resultBox.innerHTML = `<div style="color:var(--danger); font-size:13px;">保存に失敗しました: ${err.message}</div>`;
+  }
 }
-function resetAllData(){
-  if(!confirm(`蓄積された${trialScores.length}件のテストデータを全て削除します。よろしいですか?`)) return;
-  trialScores = [];
-  persistTrials();
-  document.getElementById('aggregateSection').style.display = 'none';
+
+// ---- 共有データベース(全端末共有)との通信 ----
+function dbHeaders(){
+  const secret = document.getElementById('secretInput').value.trim();
+  return {
+    "Content-Type": "application/json",
+    ...(secret ? { "x-app-secret": secret } : {})
+  };
+}
+async function saveTrialToServer(trial){
+  const endpoint = document.getElementById('endpointInput').value.trim();
+  if(!endpoint) throw new Error('Edge Function URLが未設定です');
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: dbHeaders(),
+    body: JSON.stringify({ req_type: "save_trial", trial })
+  });
+  const data = await response.json();
+  if(data.error) throw new Error(data.error);
+  return data.trial;
+}
+async function loadTrialsFromServer(){
+  const endpoint = document.getElementById('endpointInput').value.trim();
+  if(!endpoint) return;
+  try{
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: dbHeaders(),
+      body: JSON.stringify({ req_type: "list_trials" })
+    });
+    const data = await response.json();
+    if(data.error) throw new Error(data.error);
+    trialScores = data.trials || [];
+    if(trialScores.length > 0) renderAggregate();
+  }catch(err){
+    const box = document.getElementById('errorBox');
+    box.style.display = 'block';
+    box.textContent = `共有データベースからの取得に失敗しました: ${err.message}`;
+  }
+}
+async function deleteAllTrialsOnServer(){
+  const endpoint = document.getElementById('endpointInput').value.trim();
+  if(!endpoint) return;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: dbHeaders(),
+    body: JSON.stringify({ req_type: "delete_all_trials" })
+  });
+  const data = await response.json();
+  if(data.error) throw new Error(data.error);
+}
+
+async function resetAllData(){
+  if(!confirm(`共有データベース上の全端末分のテストデータ(${trialScores.length}件)を完全に削除します。よろしいですか?`)) return;
+  try{
+    await deleteAllTrialsOnServer();
+    trialScores = [];
+    document.getElementById('aggregateSection').style.display = 'none';
+  }catch(err){
+    alert('削除に失敗しました: ' + err.message);
+  }
 }
 
 function exportCSV(){
   if(trialScores.length === 0) return;
-  const headers = ['time','device','lux','distanceCm','angle','arrangement','placement','background','shadow','blur','darkModeEnabled','usedRefImages','elapsed','mae','moneyErrorPct','colorAccuracy','corrections','hadWarning','hadQualityIssue','warningDetail','recognizedDetail'];
+  const headers = ['tested_at','device','lux','distance_cm','angle','arrangement','placement','background','shadow','blur','dark_mode_enabled','used_ref_images','elapsed_sec','mae','money_error_pct','color_accuracy','corrections','had_warning','had_quality_issue','warning_detail','recognized_detail'];
   const escapeCsv = (v) => {
     const s = String(v ?? '');
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
@@ -1048,20 +1097,25 @@ function exportCSV(){
 
 function renderAggregate(){
   if(trialScores.length === 0) return;
-  const validMae = trialScores.filter(s => s.mae !== null).map(s => s.mae);
-  const avgMae = validMae.length ? (validMae.reduce((a,b)=>a+b,0)/validMae.length).toFixed(2) : '-';
-  const avgMoney = (trialScores.reduce((a,s)=>a+s.moneyErrorPct,0)/trialScores.length).toFixed(2);
-  const avgCorrections = (trialScores.reduce((a,s)=>a+s.corrections,0)/trialScores.length).toFixed(1);
-  const avgLatency = (trialScores.reduce((a,s)=>a+parseFloat(s.elapsed),0)/trialScores.length).toFixed(1);
+  const validMae = trialScores.filter(s => s.mae !== null && s.mae !== undefined).map(s => s.mae);
+  const avgMae = validMae.length ? (validMae.reduce((a,b)=>a+Number(b),0)/validMae.length).toFixed(2) : '-';
+  const avgMoney = (trialScores.reduce((a,s)=>a+Number(s.money_error_pct||0),0)/trialScores.length).toFixed(2);
+  const avgCorrections = (trialScores.reduce((a,s)=>a+Number(s.corrections||0),0)/trialScores.length).toFixed(1);
+  const avgLatency = (trialScores.reduce((a,s)=>a+parseFloat(s.elapsed_sec||0),0)/trialScores.length).toFixed(1);
 
-  const issueTrials = trialScores.filter(s => s.hadQualityIssue);
-  const recall = issueTrials.length ? (issueTrials.filter(s=>s.hadWarning).length / issueTrials.length * 100).toFixed(0) : '-';
-  const warnedTrials = trialScores.filter(s => s.hadWarning);
-  const precision = warnedTrials.length ? (warnedTrials.filter(s=>s.hadQualityIssue).length / warnedTrials.length * 100).toFixed(0) : '-';
+  const issueTrials = trialScores.filter(s => s.had_quality_issue);
+  const recall = issueTrials.length ? (issueTrials.filter(s=>s.had_warning).length / issueTrials.length * 100).toFixed(0) : '-';
+  const warnedTrials = trialScores.filter(s => s.had_warning);
+  const precision = warnedTrials.length ? (warnedTrials.filter(s=>s.had_quality_issue).length / warnedTrials.length * 100).toFixed(0) : '-';
+
+  const deviceCounts = {};
+  trialScores.forEach(s => { deviceCounts[s.device || '(未入力)'] = (deviceCounts[s.device || '(未入力)']||0)+1; });
+  const deviceSummary = Object.entries(deviceCounts).map(([d,c]) => `${d}:${c}件`).join(' / ');
 
   document.getElementById('aggregateSection').style.display = 'block';
   document.getElementById('aggregateStats').innerHTML = `
-    試行回数: ${trialScores.length}回<br>
+    試行回数(全端末合計): ${trialScores.length}回<br>
+    端末別内訳: ${deviceSummary}<br>
     平均枚数誤差(MAE): ${avgMae}枚<br>
     平均金額誤差率: ${avgMoney}%<br>
     平均修正タップ数: ${avgCorrections}回<br>
