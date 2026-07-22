@@ -897,10 +897,11 @@ warningsは検出根拠のある場合のみ出力し、憶測で無理に問題
 
   const content = [];
   withRef.forEach(c => {
-    content.push({ type: "text", text: `参照画像: 色名「${c.name}」の基準チップ(面の地色を見て判断すること)` });
+    const colorHint = c.detectedColor ? `実測RGB値: ${c.detectedColor}(この写真の中心付近をプログラムでサンプリングした客観的な色値。目視の印象とズレる場合はこの数値を優先して判断すること)` : '';
+    content.push({ type: "text", text: `参照画像: 色名「${c.name}」の基準チップ(面の地色を見て判断すること)。${colorHint}` });
     content.push({ type: "image", source: { type: "base64", media_type: c.refMime, data: c.refBase64 } });
   });
-  content.push({ type: "text", text: "以下がカウント対象の写真です。参照画像の面色と照合し、色ごとの枚数をJSONで返してください。" });
+  content.push({ type: "text", text: "以下がカウント対象の写真です。参照画像の面色(および実測RGB値)と照合し、色ごとの枚数をJSONで返してください。" });
   content.push({ type: "image", source: { type: "base64", media_type: targetMime, data: targetBase64 } });
 
   const t0 = performance.now();
