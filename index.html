@@ -1267,8 +1267,8 @@ async function scoreTrial(){
         capture_id: capture.capture_id,
         experiment_id: EXPERIMENT_ID,
         ab_group: "A",
-        model_variant: "claude-sonnet-4-6",
-        model_version: APP_VERSION,
+        model_variant: APP_VERSION,
+        model_version: "claude-sonnet-4-6",
         recognition_result: {
           detail: Object.fromEntries(parsed.map(p => [p.color, { count: p.count, unit_value: (chipColors.find(c=>c.name===p.color)?.denom || 0) }])),
           total_count: parsed.reduce((a,p)=>a+p.count,0),
