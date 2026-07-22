@@ -568,7 +568,12 @@ function renderChipRows(){
   if(chipColors.length === 0){
     container.innerHTML = '<div class="hint" style="margin-bottom:10px;">まだ色が登録されていません。「+色を追加」から、実際に使うチップの色を登録してください。</div>';
   }
+  const nameCounts = {};
+  chipColors.forEach(c => { const n = c.name.trim(); if(n) nameCounts[n] = (nameCounts[n]||0)+1; });
+
   chipColors.forEach((c, i) => {
+    const trimmedName = c.name.trim();
+    const isDupOrEmpty = trimmedName === '' || nameCounts[trimmedName] > 1;
     const card = document.createElement('div');
     card.className = 'chip-card';
     card.innerHTML = `
@@ -581,7 +586,8 @@ function renderChipRows(){
         <button class="rm-btn" style="font-size:10px; color:var(--text-dim); border:1px solid var(--panel-line); border-radius:6px; padding:2px 4px;" onclick="document.getElementById('refInput-${i}').click()">🖼️</button>
       </div>
       <div class="chip-fields">
-        <input type="text" value="${c.name}" placeholder="色名(表示用)" onchange="updateChipName(${i}, this.value)">
+        <input type="text" value="${c.name}" placeholder="色名(表示用・一意にする必要あり)" onchange="updateChipName(${i}, this.value)"
+               style="${isDupOrEmpty ? 'border-color:var(--danger);' : ''}">
         <div class="row2">
           <span class="yen-prefix">¥</span>
           <input type="text" inputmode="numeric" value="${formatNum(c.denom)}"
@@ -606,7 +612,7 @@ function renderChipRows(){
     container.appendChild(card);
   });
 }
-function updateChipName(i, val){ chipColors[i].name = val; }
+function updateChipName(i, val){ chipColors[i].name = val; renderChipRows(); }
 function updateChipDenom(i, val, inputEl){
   const n = parseNum(val);
   chipColors[i].denom = n;
@@ -911,6 +917,25 @@ async function runRecognition(){
   if(!endpoint){
     errorBox.style.display = 'block';
     errorBox.textContent = 'Edge Function URLが未設定です。画面上部の設定欄にURLを入力してください。';
+    return;
+  }
+
+  // 色名の重複・空欄チェック(重複していると、額面の紐付けが最初の1件に引きずられるバグの元になる)
+  const names = chipColors.map(c => c.name.trim());
+  if(names.some(n => n === '')){
+    errorBox.style.display = 'block';
+    errorBox.textContent = '色名が未入力の項目があります。全ての色に一意の名前を付けてから実行してください。';
+    return;
+  }
+  const dupCheck = {};
+  const duplicates = [];
+  names.forEach(n => {
+    dupCheck[n] = (dupCheck[n] || 0) + 1;
+    if(dupCheck[n] === 2) duplicates.push(n);
+  });
+  if(duplicates.length > 0){
+    errorBox.style.display = 'block';
+    errorBox.textContent = `色名が重複しています: 「${duplicates.join('、')}」。同じ名前の色が複数あると、額面が最初の1件に引きずられる原因になります。それぞれ一意の名前に変更してください。`;
     return;
   }
 
