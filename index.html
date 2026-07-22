@@ -200,7 +200,9 @@
 <section>
   <h2>設定: Edge Function エンドポイント</h2>
   <input type="text" id="endpointInput" placeholder="https://xxxx.supabase.co/functions/v1/chip-vision" style="width:100%; margin-bottom:8px;" onchange="saveEndpoint(this.value)">
-  <input type="password" id="secretInput" placeholder="x-app-secret(合言葉)" style="width:100%;" onchange="saveSecret(this.value)">
+  <input type="password" id="secretInput" placeholder="x-app-secret(合言葉)" style="width:100%; margin-bottom:10px;" onchange="saveSecret(this.value)">
+  <button class="cap-btn secondary" style="margin:0;" onclick="testConnection()">🔌 接続テスト</button>
+  <div class="status" id="connectionStatus"></div>
   <div class="hint">Supabase Edge Function(chip-vision)をデプロイ後に発行されるURLと、設定したシークレット文字列を貼り付けてください。Anthropic APIキー自体はここには入力しません(サーバー側のSecretで管理)。</div>
 </section>
 
@@ -379,6 +381,47 @@ function saveEndpoint(url){
 }
 function saveSecret(secret){
   try{ localStorage.setItem('chipvision_secret', secret); }catch(e){}
+}
+
+async function testConnection(){
+  const statusEl = document.getElementById('connectionStatus');
+  const endpoint = document.getElementById('endpointInput').value.trim();
+  const secret = document.getElementById('secretInput').value.trim();
+
+  if(!endpoint){
+    statusEl.innerHTML = '<span style="color:var(--danger)">URLが未入力です</span>';
+    return;
+  }
+
+  statusEl.innerHTML = '<div class="spinner" style="display:inline-block;"></div> 確認中...';
+
+  const t0 = performance.now();
+  try{
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(secret ? { "x-app-secret": secret } : {})
+      },
+      body: JSON.stringify({
+        system: "あなたはテスト用のアシスタントです。OKとだけ返してください。",
+        messages: [{ role: "user", content: "テスト" }],
+        max_tokens: 10
+      })
+    });
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+    const data = await response.json();
+
+    if(data.error){
+      statusEl.innerHTML = `<span style="color:var(--danger)">✕ 接続失敗: ${data.error}</span>`;
+    } else if(data.content){
+      statusEl.innerHTML = `<span style="color:var(--felt-bright)">✓ 接続成功(${elapsed}秒)</span>`;
+    } else {
+      statusEl.innerHTML = `<span style="color:var(--gold)">△ 応答はあったが想定外の形式です</span>`;
+    }
+  }catch(err){
+    statusEl.innerHTML = `<span style="color:var(--danger)">✕ 接続失敗: [${err.name}] ${err.message}</span>`;
+  }
 }
 function loadEndpoint(){
   try{
@@ -1019,4 +1062,3 @@ function renderLog(){
 
 </body>
 </html>
-<!-- last verified by Claude: 2026-07-22T08:29:10Z -->
