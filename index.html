@@ -109,6 +109,12 @@
     color:#fff; font-size:13px; padding:0 30px; text-shadow:0 1px 4px rgba(0,0,0,0.8);
     pointer-events:none;
   }
+  .camera-live-status{
+    position:absolute; bottom:120px; left:0; right:0; text-align:center;
+    font-size:14px; font-weight:600; padding:0 20px;
+    text-shadow:0 1px 4px rgba(0,0,0,0.9); pointer-events:none;
+    transition:color 0.2s;
+  }
   .camera-controls{
     position:absolute; bottom:0; left:0; right:0;
     display:flex; align-items:center; justify-content:center; gap:40px;
@@ -366,11 +372,7 @@ window.addEventListener('unhandledrejection', function(e){
   }catch(_){}
 });
 
-let chipColors = [
-  {name:'赤', denom:100, refBase64:null, refMime:null, refThumb:null},
-  {name:'青', denom:500, refBase64:null, refMime:null, refThumb:null},
-  {name:'黒', denom:1000, refBase64:null, refMime:null, refThumb:null},
-];
+let chipColors = [];
 let targetBase64 = null;
 let targetMime = null;
 let sessionLog = [];
@@ -490,6 +492,20 @@ function autoEnhance(canvas){
 }
 
 // ---- 画像リサイズ共通処理 ----
+// ---- チップ面の中心付近の平均色を抽出(色アイコン表示用) ----
+function sampleCenterColor(canvas){
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  const cropW = Math.max(1, Math.round(w * 0.3));
+  const cropH = Math.max(1, Math.round(h * 0.3));
+  const x = Math.round((w - cropW) / 2);
+  const y = Math.round((h - cropH) / 2);
+  const data = ctx.getImageData(x, y, cropW, cropH).data;
+  let r = 0, g = 0, b = 0, n = 0;
+  for(let i = 0; i < data.length; i += 4){ r += data[i]; g += data[i+1]; b += data[i+2]; n++; }
+  return `rgb(${Math.round(r/n)}, ${Math.round(g/n)}, ${Math.round(b/n)})`;
+}
+
 function resizeImageFile(file, maxEdge){
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -505,8 +521,9 @@ function resizeImageFile(file, maxEdge){
         if(document.getElementById('darkModeToggle')?.checked !== false){
           autoEnhance(canvas);
         }
+        const dominantColor = sampleCenterColor(canvas);
         const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        resolve({ dataUrl, base64: dataUrl.split(',')[1], mime: 'image/jpeg', w, h });
+        resolve({ dataUrl, base64: dataUrl.split(',')[1], mime: 'image/jpeg', w, h, dominantColor });
       };
       img.onerror = reject;
       img.src = reader.result;
@@ -520,12 +537,16 @@ function resizeImageFile(file, maxEdge){
 function renderChipRows(){
   const container = document.getElementById('chipRows');
   container.innerHTML = '';
+  if(chipColors.length === 0){
+    container.innerHTML = '<div class="hint" style="margin-bottom:10px;">まだ色が登録されていません。「+色を追加」から、実際に使うチップの色を登録してください。</div>';
+  }
   chipColors.forEach((c, i) => {
     const card = document.createElement('div');
     card.className = 'chip-card';
     card.innerHTML = `
       <div class="chip-thumb" onclick="openCamera(function(result){ setRefResult(${i}, result); }, 500, 'チップ1枚の面を大きく写してください')">
         ${c.refThumb ? `<img src="${c.refThumb}">` : `<span class="placeholder">📷</span>`}
+        ${c.detectedColor ? `<span style="position:absolute; bottom:-3px; right:-3px; width:16px; height:16px; border-radius:50%; background:${c.detectedColor}; border:2px solid var(--panel);" title="検出色: ${c.detectedColor}"></span>` : ''}
       </div>
       <div style="display:flex; flex-direction:column; gap:4px;">
         <input type="file" id="refInput-${i}" accept="image/*" style="display:none" onchange="onRefFileSelected(${i}, event)">
@@ -572,6 +593,7 @@ function setRefResult(i, result){
   chipColors[i].refBase64 = result.base64;
   chipColors[i].refMime = result.mime;
   chipColors[i].refThumb = result.dataUrl;
+  chipColors[i].detectedColor = result.dominantColor || null;
   renderChipRows();
   detectDenomination(i);
 }
@@ -691,6 +713,7 @@ async function openCamera(onCaptured, maxEdge, guideText){
       });
       video.srcObject = activeStream;
       await video.play();
+      startLiveAnalysis();
     }catch(err){
       closeCamera();
       showCameraError(`カメラを起動できませんでした。[${err.name || 'Error'}] ${err.message || err}\n「写真を選択」をお使いください。`);
@@ -698,6 +721,64 @@ async function openCamera(onCaptured, maxEdge, guideText){
   }catch(outerErr){
     showCameraError(`予期しないエラーが発生しました。[${outerErr.name || 'Error'}] ${outerErr.message || outerErr}`);
   }
+}
+
+// ---- 撮影中のリアルタイム品質チェック(暗さ・ブレ/距離の簡易ヒューリスティック) ----
+let liveAnalysisInterval = null;
+function startLiveAnalysis(){
+  const video = document.getElementById('cameraVideo');
+  const statusEl = document.getElementById('cameraLiveStatus');
+  const canvas = document.createElement('canvas');
+  const SW = 80, SH = 60;
+  canvas.width = SW; canvas.height = SH;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+  if(liveAnalysisInterval) clearInterval(liveAnalysisInterval);
+  liveAnalysisInterval = setInterval(() => {
+    if(!video.videoWidth) return;
+    try{
+      ctx.drawImage(video, 0, 0, SW, SH);
+      const data = ctx.getImageData(0, 0, SW, SH).data;
+
+      const gray = new Float32Array(SW * SH);
+      let sumLum = 0;
+      for(let i = 0, p = 0; i < data.length; i += 4, p++){
+        const lum = 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2];
+        gray[p] = lum;
+        sumLum += lum;
+      }
+      const avgLum = sumLum / (SW * SH);
+
+      let gradSum = 0, gradCount = 0;
+      for(let y = 0; y < SH; y++){
+        for(let x = 0; x < SW - 1; x++){
+          const idx = y * SW + x;
+          gradSum += Math.abs(gray[idx+1] - gray[idx]);
+          gradCount++;
+        }
+      }
+      const detailScore = gradSum / gradCount;
+
+      const issues = [];
+      if(avgLum < 55) issues.push('暗すぎます');
+      if(detailScore < 6) issues.push('ピント/距離を確認してください');
+
+      const statusEl2 = document.getElementById('cameraLiveStatus');
+      if(!statusEl2) return;
+      if(issues.length === 0){
+        statusEl2.textContent = '✓ 撮影条件は良好です';
+        statusEl2.style.color = '#8ee6b8';
+      }else{
+        statusEl2.textContent = '⚠ ' + issues.join(' / ');
+        statusEl2.style.color = '#f0c96a';
+      }
+    }catch(e){ /* フレーム取得失敗時は無視して次回に回す */ }
+  }, 400);
+}
+function stopLiveAnalysis(){
+  if(liveAnalysisInterval){ clearInterval(liveAnalysisInterval); liveAnalysisInterval = null; }
+  const statusEl = document.getElementById('cameraLiveStatus');
+  if(statusEl) statusEl.textContent = '';
 }
 
 function showCameraError(msg){
@@ -708,6 +789,7 @@ function showCameraError(msg){
 }
 
 function closeCamera(){
+  stopLiveAnalysis();
   document.getElementById('cameraModal').style.display = 'none';
   if(activeStream){
     activeStream.getTracks().forEach(t => t.stop());
@@ -748,8 +830,9 @@ function processCanvasToResult(canvas, maxEdge){
   if(document.getElementById('darkModeToggle')?.checked !== false){
     autoEnhance(targetCanvas);
   }
+  const dominantColor = sampleCenterColor(targetCanvas);
   const dataUrl = targetCanvas.toDataURL('image/jpeg', 0.85);
-  return { dataUrl, base64: dataUrl.split(',')[1], mime: 'image/jpeg', w, h };
+  return { dataUrl, base64: dataUrl.split(',')[1], mime: 'image/jpeg', w, h, dominantColor };
 }
 
 
@@ -1240,6 +1323,7 @@ function renderLog(){
   <button class="cancel-btn" onclick="closeCamera()">✕</button>
   <video id="cameraVideo" autoplay playsinline muted></video>
   <div class="camera-guide" id="cameraGuide"></div>
+  <div class="camera-live-status" id="cameraLiveStatus"></div>
   <div class="camera-controls">
     <button class="shutter-btn" onclick="triggerCapture()"></button>
   </div>
