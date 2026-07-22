@@ -1,0 +1,997 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Chip Count Lab — 認識検証 v2</title>
+<style>
+  :root{
+    --bg:#12151a;
+    --panel:#1a1f27;
+    --panel-line:#262c37;
+    --felt:#1f6b4f;
+    --felt-bright:#2f9d76;
+    --gold:#c9a227;
+    --text:#e8e9ec;
+    --text-dim:#8b93a1;
+    --danger:#c0524a;
+    --mono: 'SF Mono', 'Consolas', 'Menlo', monospace;
+    --sans: -apple-system, 'Hiragino Sans', 'Yu Gothic', sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:var(--sans); padding:0 0 60px 0;
+    -webkit-tap-highlight-color:transparent;
+  }
+  header{
+    padding:28px 20px 20px;
+    border-bottom:1px solid var(--panel-line);
+    background:linear-gradient(180deg, #151a20, var(--bg));
+  }
+  .eyebrow{
+    font-family:var(--mono); font-size:11px; letter-spacing:.14em;
+    color:var(--felt-bright); text-transform:uppercase; margin-bottom:6px;
+  }
+  h1{ font-size:20px; margin:0 0 4px; font-weight:700; letter-spacing:-0.01em;}
+  .sub{ color:var(--text-dim); font-size:13px; line-height:1.5;}
+
+  section{ padding:20px; border-bottom:1px solid var(--panel-line);}
+  h2{
+    font-size:13px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--text-dim); margin:0 0 14px; font-weight:600;
+  }
+  .step-num{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:20px; height:20px; border-radius:50%; background:var(--felt);
+    color:#fff; font-family:var(--mono); font-size:11px; margin-right:8px;
+  }
+
+  .chip-card{
+    display:flex; gap:10px; align-items:center; margin-bottom:10px;
+    background:var(--panel); border:1px solid var(--panel-line);
+    border-radius:12px; padding:10px;
+  }
+  .chip-thumb{
+    width:52px; height:52px; border-radius:8px; flex-shrink:0;
+    background:#0d1015; display:flex; align-items:center; justify-content:center;
+    overflow:hidden; border:1px solid var(--panel-line); cursor:pointer;
+    position:relative;
+  }
+  .chip-thumb img{ width:100%; height:100%; object-fit:cover; }
+  .chip-thumb .placeholder{ font-size:20px; color:var(--text-dim); }
+  .chip-thumb input[type=file]{ display:none; }
+  .chip-fields{ flex:1; display:flex; flex-direction:column; gap:6px; }
+  .chip-fields input[type=text]{ width:100%; }
+  .chip-fields .row2{ display:flex; gap:6px; align-items:center; }
+  .chip-fields .row2 input{ flex:1; }
+  .yen-prefix{ color:var(--text-dim); font-family:var(--mono); font-size:13px; }
+  .rm-btn{
+    background:none; border:none; color:var(--text-dim); font-size:18px;
+    cursor:pointer; padding:0 4px; align-self:flex-start;
+  }
+  .add-row{
+    background:none; border:1px dashed var(--panel-line); color:var(--text-dim);
+    padding:8px 14px; border-radius:8px; font-size:13px; cursor:pointer; margin-top:4px;
+    width:100%;
+  }
+  input, select{
+    background:#12151a; border:1px solid var(--panel-line);
+    color:var(--text); padding:9px 10px; border-radius:8px; font-size:14px;
+    font-family:var(--sans);
+  }
+  input:focus{ outline:none; border-color:var(--felt-bright); }
+  input[inputmode=numeric]{ font-family:var(--mono); text-align:right; }
+
+  .cap-area{
+    border:1px solid var(--panel-line); border-radius:14px; padding:16px;
+    background:var(--panel); text-align:center;
+  }
+  .cap-btn{
+    display:block; width:100%; padding:16px; border-radius:12px;
+    background:var(--felt); color:#fff; border:none; font-size:15px;
+    font-weight:600; cursor:pointer; margin-bottom:10px;
+  }
+  .cap-btn:active{ background:var(--felt-bright); }
+  .cap-btn.secondary{
+    background:transparent; border:1px solid var(--panel-line); color:var(--text);
+  }
+
+  #cameraModal{
+    display:none; position:fixed; inset:0; background:#000;
+    z-index:1000; flex-direction:column;
+  }
+  #cameraModal video{
+    flex:1; width:100%; height:100%; object-fit:cover; background:#000;
+  }
+  .camera-guide{
+    position:absolute; top:20px; left:0; right:0; text-align:center;
+    color:#fff; font-size:13px; padding:0 30px; text-shadow:0 1px 4px rgba(0,0,0,0.8);
+    pointer-events:none;
+  }
+  .camera-controls{
+    position:absolute; bottom:0; left:0; right:0;
+    display:flex; align-items:center; justify-content:center; gap:40px;
+    padding:24px 0 34px; background:linear-gradient(0deg, rgba(0,0,0,0.6), transparent);
+  }
+  .shutter-btn{
+    width:66px; height:66px; border-radius:50%; background:#fff;
+    border:4px solid rgba(255,255,255,0.4); cursor:pointer;
+  }
+  .cancel-btn{
+    position:absolute; top:16px; right:16px; width:36px; height:36px;
+    border-radius:50%; background:rgba(0,0,0,0.5); border:none; color:#fff;
+    font-size:18px; cursor:pointer; z-index:1001;
+  }
+  #preview{
+    max-width:100%; border-radius:10px; margin-top:10px; display:none;
+    border:1px solid var(--panel-line);
+  }
+  .hint{ font-size:12px; color:var(--text-dim); margin-top:10px; line-height:1.6; text-align:left;}
+  .hint b{ color:var(--gold); font-weight:600;}
+
+  .run-btn{
+    width:100%; padding:16px; border-radius:12px; border:none;
+    background:var(--gold); color:#1a1204; font-weight:700; font-size:15px;
+    cursor:pointer; margin-top:14px;
+  }
+  .run-btn:disabled{ opacity:.5; }
+
+  .status{
+    display:flex; align-items:center; gap:8px; font-family:var(--mono);
+    font-size:12px; color:var(--text-dim); margin-top:12px; min-height:16px;
+  }
+  .spinner{
+    width:12px; height:12px; border-radius:50%; border:2px solid var(--panel-line);
+    border-top-color:var(--felt-bright); animation:spin .7s linear infinite; display:none;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg);} }
+
+  table{ width:100%; border-collapse:collapse; margin-top:10px;}
+  th{
+    text-align:left; font-size:11px; color:var(--text-dim); text-transform:uppercase;
+    letter-spacing:.05em; padding:6px 4px; border-bottom:1px solid var(--panel-line);
+  }
+  td{ padding:8px 4px; border-bottom:1px solid var(--panel-line); font-size:14px;}
+  td.num{ font-family:var(--mono); text-align:right; }
+  td input[inputmode=numeric]{ width:80px; padding:6px 8px; }
+  .total-row td{
+    font-weight:700; font-size:16px; border-bottom:none; padding-top:14px;
+    color:var(--gold); font-family:var(--mono);
+  }
+
+  .log-entry{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:10px 0; border-bottom:1px solid var(--panel-line); font-size:13px;
+  }
+  .log-entry:last-child{ border-bottom:none; }
+  .log-meta{ color:var(--text-dim); font-family:var(--mono); font-size:11px;}
+  .log-total{ font-family:var(--mono); font-weight:700; color:var(--felt-bright);}
+
+  .error-box{
+    background:rgba(192,82,74,0.12); border:1px solid var(--danger);
+    color:#e8a8a3; padding:12px 14px; border-radius:10px; font-size:13px;
+    margin-top:12px; display:none; white-space:pre-wrap;
+  }
+  .warning-box{
+    background:rgba(201,162,39,0.12); border:1px solid var(--gold);
+    color:#e8d49a; padding:12px 14px; border-radius:10px; font-size:13px;
+    margin-top:12px; display:none;
+  }
+  .warning-box .warning-title{
+    font-weight:700; color:var(--gold); font-size:12px; margin-bottom:6px;
+    text-transform:uppercase; letter-spacing:.05em;
+  }
+  .warning-box ul{ margin:0; padding-left:18px; }
+  .warning-box li{ margin-bottom:4px; line-height:1.5; }
+  .badge-noref{
+    font-size:10px; color:var(--danger); font-family:var(--mono); margin-left:4px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="eyebrow">Chip Count Lab · v0.2</div>
+  <h1>チップ認識 検証プロトタイプ</h1>
+  <div class="sub">色ごとに参照写真を登録 → 面色ベースで照合。縞模様・斑点による誤認識を抑える設計。</div>
+</header>
+
+<section>
+  <h2>設定: Edge Function エンドポイント</h2>
+  <input type="text" id="endpointInput" placeholder="https://xxxx.supabase.co/functions/v1/chip-vision" style="width:100%; margin-bottom:8px;" onchange="saveEndpoint(this.value)">
+  <input type="password" id="secretInput" placeholder="x-app-secret(合言葉)" style="width:100%;" onchange="saveSecret(this.value)">
+  <div class="hint">Supabase Edge Function(chip-vision)をデプロイ後に発行されるURLと、設定したシークレット文字列を貼り付けてください。Anthropic APIキー自体はここには入力しません(サーバー側のSecretで管理)。</div>
+</section>
+
+<section>
+  <h2><span class="step-num">1</span>色ごとの参照写真 + 額面</h2>
+  <div id="chipRows"></div>
+  <button class="add-row" onclick="addChipRow()">+ 色を追加</button>
+  <div class="hint" style="margin-top:12px;">
+    <b>参照写真のコツ:</b> 本番と同じ照明下・同じ場所で、チップ1枚の面をできるだけ大きく正面から撮影してください。パッケージ写真の流用や別環境での撮影は、照明差により精度が下がります。
+  </div>
+  <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:13px; color:var(--text-dim);">
+    <input type="checkbox" id="darkModeToggle" checked style="width:auto;">
+    暗所補正を有効にする(暗い写真のみ自動でコントラスト補正)
+  </label>
+</section>
+
+<section>
+  <h2><span class="step-num">2</span>チップ撮影(横一列に並べる)</h2>
+  <div class="cap-area">
+    <input type="file" id="fileInput" accept="image/*" style="display:none" onchange="onTargetFileSelected(event)">
+    <button class="cap-btn" onclick="openCamera(onTargetCaptured, 1280, '横一列に並べて撮影してください')">📷 カメラで撮影</button>
+    <button class="cap-btn secondary" onclick="document.getElementById('fileInput').click()">🖼️ 写真を選択</button>
+    <img id="preview">
+    <div class="hint">
+      <b>手順:</b> 先にスマホの標準カメラアプリで撮影 → ここで選択してください。<br><br>
+      <b>横一列ルール:</b> チップタワーは重ならないよう間隔を空けて並べてください。
+    </div>
+  </div>
+</section>
+
+<section>
+  <button class="run-btn" id="runBtn" onclick="runRecognition()" disabled>この写真で認識を実行</button>
+  <div class="status">
+    <div class="spinner" id="spinner"></div>
+    <span id="statusText"></span>
+  </div>
+  <div class="error-box" id="errorBox"></div>
+  <div class="warning-box" id="warningBox">
+    <div class="warning-title">⚠ 検出された懸念点</div>
+    <ul id="warningList"></ul>
+  </div>
+</section>
+
+<section id="resultSection" style="display:none">
+  <h2><span class="step-num">3</span>認識結果(タップで修正可)</h2>
+  <table>
+    <thead><tr><th>色</th><th>枚数</th><th>額面</th><th>小計</th></tr></thead>
+    <tbody id="resultBody"></tbody>
+    <tfoot><tr class="total-row"><td colspan="3">合計</td><td class="num" id="grandTotal">¥0</td></tr></tfoot>
+  </table>
+</section>
+
+<section id="scoringSection" style="display:none">
+  <h2><span class="step-num">4</span>正解入力 + 撮影条件タグ → 自動採点</h2>
+  <div class="hint" style="margin-bottom:10px;">実際にチップを数えた正しい枚数を入力してください。認識精度・金額誤差率を自動計算します。</div>
+  <div id="scoringInputs"></div>
+
+  <div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--panel-line);">
+    <div class="hint" style="margin-bottom:10px;"><b>撮影条件タグ</b>(再現性のある検証のため、できるだけ数値・実測で記録)</div>
+
+    <div class="row2" style="margin-bottom:8px;">
+      <span style="width:90px; flex:none; font-size:13px;">端末名</span>
+      <input type="text" id="tag-device" placeholder="例: iPhone 14">
+    </div>
+    <div class="row2" style="margin-bottom:8px;">
+      <span style="width:90px; flex:none; font-size:13px;">照度(lux)</span>
+      <input type="text" inputmode="numeric" id="tag-lux" placeholder="照度計アプリ等で実測">
+    </div>
+    <div class="row2" style="margin-bottom:8px;">
+      <span style="width:90px; flex:none; font-size:13px;">距離(cm)</span>
+      <input type="text" inputmode="numeric" id="tag-distance" placeholder="例: 30">
+    </div>
+    <div class="row2" style="margin-bottom:8px;">
+      <span style="width:90px; flex:none; font-size:13px;">撮影角度</span>
+      <select id="tag-angle">
+        <option value="90(真上)">90°(真上)</option>
+        <option value="45">45°</option>
+        <option value="20(ほぼ真横)">20°(ほぼ真横)</option>
+      </select>
+    </div>
+    <div class="row2" style="margin-bottom:8px;">
+      <span style="width:90px; flex:none; font-size:13px;">チップ状態</span>
+      <select id="tag-arrangement">
+        <option value="整列">整列</option>
+        <option value="やや傾き">やや傾き</option>
+        <option value="崩れ">崩れ・バラ山</option>
+      </select>
+    </div>
+    <div class="row2" style="margin-bottom:8px;">
+      <span style="width:90px; flex:none; font-size:13px;">配置</span>
+      <select id="tag-placement">
+        <option value="横一列(間隔あり)">横一列(間隔あり)</option>
+        <option value="密集">密集</option>
+        <option value="一部重なり">一部重なり</option>
+      </select>
+    </div>
+    <div class="row2" style="margin-bottom:8px;">
+      <span style="width:90px; flex:none; font-size:13px;">背景</span>
+      <select id="tag-background">
+        <option value="無地">無地</option>
+        <option value="近似色">近似色(チップと紛らわしい)</option>
+        <option value="雑然">雑然(手・カード等が写り込み)</option>
+      </select>
+    </div>
+    <div class="row2" style="margin-bottom:8px;">
+      <span style="width:90px; flex:none; font-size:13px;">影</span>
+      <select id="tag-shadow">
+        <option value="なし">なし</option>
+        <option value="柔らかい">柔らかい影</option>
+        <option value="硬い">硬い影</option>
+        <option value="人影">人の手・体の影</option>
+      </select>
+    </div>
+    <div class="row2" style="margin-bottom:8px;">
+      <span style="width:90px; flex:none; font-size:13px;">ブレ</span>
+      <select id="tag-blur">
+        <option value="なし">なし</option>
+        <option value="手ブレ">手ブレ</option>
+        <option value="ピンボケ">ピンボケ(AF失敗)</option>
+      </select>
+    </div>
+  </div>
+
+  <label style="display:flex; align-items:center; gap:8px; margin:14px 0; font-size:13px; color:var(--text-dim);">
+    <input type="checkbox" id="qualityIssueFlag" style="width:auto;">
+    この写真は撮影条件に問題があった(重なり・影・ブレ・傾き等)
+  </label>
+  <button class="run-btn" onclick="scoreTrial()">採点する</button>
+  <div id="scoreResult" style="margin-top:14px; display:none;"></div>
+</section>
+
+<section id="aggregateSection" style="display:none">
+  <h2>累積スコア(このセッション全体)</h2>
+  <div id="aggregateStats" style="font-family:var(--mono); font-size:13px; line-height:2;"></div>
+  <div style="display:flex; gap:10px; margin-top:14px;">
+    <button class="cap-btn secondary" style="margin:0;" onclick="exportCSV()" id="csvBtn">📄 CSVダウンロード</button>
+    <button class="cap-btn secondary" style="margin:0; color:var(--danger); border-color:var(--danger);" onclick="resetAllData()">🗑 全データ削除</button>
+  </div>
+</section>
+
+<section>
+  <h2>検証ログ(このセッション内)</h2>
+  <div id="logList" style="color:var(--text-dim); font-size:13px;">まだ記録がありません。</div>
+</section>
+
+<script>
+let chipColors = [
+  {name:'赤', denom:100, refBase64:null, refMime:null, refThumb:null},
+  {name:'青', denom:500, refBase64:null, refMime:null, refThumb:null},
+  {name:'黒', denom:1000, refBase64:null, refMime:null, refThumb:null},
+];
+let targetBase64 = null;
+let targetMime = null;
+let sessionLog = [];
+let correctionCount = 0;
+
+function saveEndpoint(url){
+  try{ localStorage.setItem('chipvision_endpoint', url); }catch(e){}
+}
+function saveSecret(secret){
+  try{ localStorage.setItem('chipvision_secret', secret); }catch(e){}
+}
+function loadEndpoint(){
+  try{
+    const saved = localStorage.getItem('chipvision_endpoint');
+    if(saved){ document.getElementById('endpointInput').value = saved; }
+    const savedSecret = localStorage.getItem('chipvision_secret');
+    if(savedSecret){ document.getElementById('secretInput').value = savedSecret; }
+  }catch(e){}
+}
+loadEndpoint();
+loadTrials();
+
+// ---- 数値フォーマット系(3桁区切り + 0クリア済み入力) ----
+function formatNum(n){
+  if(n === null || n === undefined || isNaN(n)) return '';
+  return Number(n).toLocaleString('ja-JP');
+}
+function parseNum(str){
+  const cleaned = String(str).replace(/[^0-9]/g, '');
+  return cleaned === '' ? 0 : parseInt(cleaned, 10);
+}
+function selectAllOnFocus(e){ e.target.select(); }
+
+// ---- 暗所対策: 簡易コントラスト自動補正(パーセンタイルベースのヒストグラムストレッチ) ----
+function autoEnhance(canvas){
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const d = imgData.data;
+
+  // 輝度ヒストグラムを作成
+  const hist = new Array(256).fill(0);
+  for(let i = 0; i < d.length; i += 4){
+    const lum = Math.round(0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2]);
+    hist[lum]++;
+  }
+  const totalPixels = w * h;
+  const clipPct = 0.01; // 上下1%をクリップして外れ値の影響を避ける
+  let cumulative = 0, lowClip = 0, highClip = 255;
+  for(let i = 0; i < 256; i++){
+    cumulative += hist[i];
+    if(cumulative >= totalPixels * clipPct){ lowClip = i; break; }
+  }
+  cumulative = 0;
+  for(let i = 255; i >= 0; i--){
+    cumulative += hist[i];
+    if(cumulative >= totalPixels * clipPct){ highClip = i; break; }
+  }
+  if(highClip <= lowClip) return; // 補正不要(既に十分なコントラスト)
+
+  const range = highClip - lowClip;
+  // 暗すぎる画像(平均輝度が低い)の場合のみ補正を適用し、明るい画像には手を加えない
+  const meanLum = hist.reduce((sum, count, i) => sum + count * i, 0) / totalPixels;
+  if(meanLum > 130) return; // 十分明るい画像は無補正
+
+  for(let i = 0; i < d.length; i += 4){
+    for(let c = 0; c < 3; c++){
+      const v = d[i+c];
+      d[i+c] = Math.max(0, Math.min(255, (v - lowClip) * 255 / range));
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+}
+
+// ---- 画像リサイズ共通処理 ----
+function resizeImageFile(file, maxEdge){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        if(w > h && w > maxEdge){ h = Math.round(h * maxEdge / w); w = maxEdge; }
+        else if(h >= w && h > maxEdge){ w = Math.round(w * maxEdge / h); h = maxEdge; }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        if(document.getElementById('darkModeToggle')?.checked !== false){
+          autoEnhance(canvas);
+        }
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        resolve({ dataUrl, base64: dataUrl.split(',')[1], mime: 'image/jpeg', w, h });
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// ---- 色行のレンダリング ----
+function renderChipRows(){
+  const container = document.getElementById('chipRows');
+  container.innerHTML = '';
+  chipColors.forEach((c, i) => {
+    const card = document.createElement('div');
+    card.className = 'chip-card';
+    card.innerHTML = `
+      <div class="chip-thumb" onclick="openCamera(function(result){ setRefResult(${i}, result); }, 500, 'チップ1枚の面を大きく写してください')">
+        ${c.refThumb ? `<img src="${c.refThumb}">` : `<span class="placeholder">📷</span>`}
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px;">
+        <input type="file" id="refInput-${i}" accept="image/*" style="display:none" onchange="onRefFileSelected(${i}, event)">
+        <button class="rm-btn" style="font-size:10px; color:var(--text-dim); border:1px solid var(--panel-line); border-radius:6px; padding:2px 4px;" onclick="document.getElementById('refInput-${i}').click()">🖼️</button>
+      </div>
+      <div class="chip-fields">
+        <input type="text" value="${c.name}" placeholder="色名(表示用)" onchange="updateChipName(${i}, this.value)">
+        <div class="row2">
+          <span class="yen-prefix">¥</span>
+          <input type="text" inputmode="numeric" value="${formatNum(c.denom)}"
+                 onfocus="selectAllOnFocus(event)"
+                 onblur="updateChipDenom(${i}, this.value, this)">
+          ${!c.refBase64 ? '<span class="badge-noref">参照写真未登録</span>' : ''}
+        </div>
+      </div>
+      <button class="rm-btn" onclick="removeChip(${i})">✕</button>
+    `;
+    container.appendChild(card);
+  });
+}
+function updateChipName(i, val){ chipColors[i].name = val; }
+function updateChipDenom(i, val, inputEl){
+  const n = parseNum(val);
+  chipColors[i].denom = n;
+  inputEl.value = formatNum(n);
+}
+function removeChip(i){ chipColors.splice(i,1); renderChipRows(); }
+function addChipRow(){ chipColors.push({name:'', denom:0, refBase64:null, refMime:null, refThumb:null}); renderChipRows(); }
+
+async function onRefFileSelected(i, e){
+  const file = e.target.files[0];
+  if(!file) return;
+  try{
+    const result = await resizeImageFile(file, 400);
+    setRefResult(i, result);
+  }catch(err){
+    alert('参照画像の読み込みに失敗しました');
+  }
+}
+function setRefResult(i, result){
+  chipColors[i].refBase64 = result.base64;
+  chipColors[i].refMime = result.mime;
+  chipColors[i].refThumb = result.dataUrl;
+  renderChipRows();
+}
+renderChipRows();
+
+// ---- ターゲット写真 ----
+function applyTargetResult(result){
+  targetBase64 = result.base64;
+  targetMime = result.mime;
+  const preview = document.getElementById('preview');
+  preview.src = result.dataUrl;
+  preview.style.display = 'block';
+  document.getElementById('runBtn').disabled = false;
+  const sizeKB = Math.round(targetBase64.length * 0.75 / 1024);
+  document.getElementById('statusText').textContent = `準備完了(${result.w}×${result.h}, 約${sizeKB}KB)`;
+}
+function onTargetCaptured(result){
+  applyTargetResult(result);
+}
+async function onTargetFileSelected(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  const statusText = document.getElementById('statusText');
+  statusText.textContent = '画像を圧縮中...';
+  try{
+    const result = await resizeImageFile(file, 1280);
+    applyTargetResult(result);
+  }catch(err){
+    statusText.textContent = '画像の読み込みに失敗しました';
+  }
+}
+
+// ---- ライブカメラ撮影 ----
+let activeStream = null;
+let pendingCaptureHandler = null;
+let pendingMaxEdge = 1280;
+
+async function openCamera(onCaptured, maxEdge, guideText){
+  const modal = document.getElementById('cameraModal');
+  const video = document.getElementById('cameraVideo');
+  document.getElementById('cameraGuide').textContent = guideText || '';
+  pendingCaptureHandler = onCaptured;
+  pendingMaxEdge = maxEdge;
+
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    showCameraError('この環境ではカメラAPI(getUserMedia)自体が存在しません。ブラウザまたは実行環境の制約の可能性があります。「写真を選択」をお使いください。');
+    return;
+  }
+
+  modal.style.display = 'flex';
+  try{
+    activeStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' } },
+      audio: false
+    });
+    video.srcObject = activeStream;
+    await video.play();
+  }catch(err){
+    closeCamera();
+    showCameraError(`カメラを起動できませんでした。[${err.name || 'Error'}] ${err.message || err}\n「写真を選択」をお使いください。`);
+  }
+}
+
+function showCameraError(msg){
+  const errorBox = document.getElementById('errorBox');
+  errorBox.style.display = 'block';
+  errorBox.textContent = msg;
+  document.getElementById('statusText').textContent = 'カメラ起動エラー';
+}
+
+function closeCamera(){
+  document.getElementById('cameraModal').style.display = 'none';
+  if(activeStream){
+    activeStream.getTracks().forEach(t => t.stop());
+    activeStream = null;
+  }
+  pendingCaptureHandler = null;
+}
+
+async function triggerCapture(){
+  const video = document.getElementById('cameraVideo');
+  if(!video.videoWidth){ return; }
+  const rawCanvas = document.createElement('canvas');
+  rawCanvas.width = video.videoWidth;
+  rawCanvas.height = video.videoHeight;
+  rawCanvas.getContext('2d').drawImage(video, 0, 0);
+
+  const handler = pendingCaptureHandler;
+  const maxEdge = pendingMaxEdge;
+  closeCamera();
+
+  const result = processCanvasToResult(rawCanvas, maxEdge);
+  if(handler) handler(result);
+}
+
+function processCanvasToResult(canvas, maxEdge){
+  let w = canvas.width, h = canvas.height;
+  let targetCanvas = canvas;
+  if(Math.max(w, h) > maxEdge){
+    let nw = w, nh = h;
+    if(w > h){ nh = Math.round(h * maxEdge / w); nw = maxEdge; }
+    else{ nw = Math.round(w * maxEdge / h); nh = maxEdge; }
+    const c2 = document.createElement('canvas');
+    c2.width = nw; c2.height = nh;
+    c2.getContext('2d').drawImage(canvas, 0, 0, nw, nh);
+    targetCanvas = c2;
+    w = nw; h = nh;
+  }
+  if(document.getElementById('darkModeToggle')?.checked !== false){
+    autoEnhance(targetCanvas);
+  }
+  const dataUrl = targetCanvas.toDataURL('image/jpeg', 0.85);
+  return { dataUrl, base64: dataUrl.split(',')[1], mime: 'image/jpeg', w, h };
+}
+
+
+// ---- 認識実行 ----
+async function runRecognition(){
+  if(!targetBase64) return;
+  const runBtn = document.getElementById('runBtn');
+  const spinner = document.getElementById('spinner');
+  const statusText = document.getElementById('statusText');
+  const errorBox = document.getElementById('errorBox');
+  errorBox.style.display = 'none';
+  document.getElementById('warningBox').style.display = 'none';
+
+  const endpoint = document.getElementById('endpointInput').value.trim();
+  if(!endpoint){
+    errorBox.style.display = 'block';
+    errorBox.textContent = 'Edge Function URLが未設定です。画面上部の設定欄にURLを入力してください。';
+    return;
+  }
+
+  correctionCount = 0;
+  runBtn.disabled = true;
+  spinner.style.display = 'inline-block';
+  statusText.textContent = '認識中...';
+
+  const colorList = chipColors.map(c => c.name).join(', ');
+  const withRef = chipColors.filter(c => c.refBase64);
+  const withoutRef = chipColors.filter(c => !c.refBase64);
+  window._lastUsedRefCount = withRef.length;
+
+  const systemPrompt = `あなたはポーカーチップの画像認識アシスタントです。
+対象の色カテゴリ: ${colorList}
+${withRef.length > 0 ? '各色について、そのチップ単体を写した「参照画像」を先に提示します。参照画像は各色の基準サンプルです。' : ''}
+
+分類の最重要ルール:
+- 分類の判断基準は、チップの「面の中心(外周から内側におよそ30%以上入った、無地の円形部分)」の地色のみとする。外周の模様が入っている領域は完全に無視すること。
+- チップの「縁(エッジ)」に施された格子模様・斑点・縞模様は、他の色の要素を含んでいても分類の根拠にしない。
+- 白・アイボリーなど無彩色に近い色は、周囲の照明(蛍光灯・LEDの色かぶりや反射)の影響を受けて青みがかって見えることがある。無彩色系のチップを判定する際は、彩度の低さ(色味の薄さ)を最優先の手がかりとし、わずかな色相の傾きだけで青などの有彩色に分類しないこと。
+- 参照画像がある色については、対象画像内の各チップを参照画像の面の中心色と見比べて最も近いものに分類すること。参照画像と対象画像で照明条件が異なる場合があるため、絶対的な色味よりも「他の色との相対的な違い」を重視して判断すること。
+
+積み重なったスタックは、側面の縁の段差(リッジ)を数えて枚数を推定してください。不確実でも最も妥当な推定値を返してください。
+
+出力は必ず次のJSON形式のみで返してください。説明文、前置き、思考過程、Markdownのコードフェンスは一切含めないでください。最初の文字は必ず「{」、最後の文字は必ず「}」にしてください。
+{
+  "counts": [{"color": "色名", "count": 枚数}, ...],
+  "warnings": ["検出した問題点を日本語の短い一文で", ...]
+}
+
+warningsには、以下のような「入力画像自体の問題」で推定精度が下がっている可能性がある場合に、該当するものだけを具体的に記述してください。問題がなければ空配列 [] にしてください。
+- 複数のチップタワーが重なって奥のタワーの一部または全部が隠れている(例: "黒のタワーの奥に別の色が隠れている可能性があります")
+- 影が濃く、チップの縁の段差や色が判別しづらい箇所がある
+- チップが斜めに傾いていたり、崩れていて段差のカウントが困難な箇所がある
+- 手ブレやピンボケで輪郭が不明瞭な箇所がある
+- 登録されている色カテゴリのどれにも当てはまらない色のチップが写っている
+- 照明の色かぶりにより、色の判定に自信が持てない箇所がある(特に白・アイボリーなど無彩色系)
+
+warningsは検出根拠のある場合のみ出力し、憶測で無理に問題点を作り出さないでください。
+画像に写っていない色はcountsに含めないでください。上記スキーマ以外のテキストを1文字でも出力すると処理が失敗します。`;
+
+  const content = [];
+  withRef.forEach(c => {
+    content.push({ type: "text", text: `参照画像: 色名「${c.name}」の基準チップ(面の地色を見て判断すること)` });
+    content.push({ type: "image", source: { type: "base64", media_type: c.refMime, data: c.refBase64 } });
+  });
+  content.push({ type: "text", text: "以下がカウント対象の写真です。参照画像の面色と照合し、色ごとの枚数をJSONで返してください。" });
+  content.push({ type: "image", source: { type: "base64", media_type: targetMime, data: targetBase64 } });
+
+  const t0 = performance.now();
+  try{
+    const secret = document.getElementById('secretInput').value.trim();
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(secret ? { "x-app-secret": secret } : {})
+      },
+      body: JSON.stringify({
+        max_tokens: 1000,
+        system: systemPrompt,
+        messages: [ { role: "user", content } ]
+      })
+    });
+    const data = await response.json();
+    if(data.error){ throw new Error(data.error); }
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+
+    const textBlock = (data.content || []).map(b => b.text || '').join('');
+    let cleaned = textBlock.replace(/```json|```/g, '').trim();
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if(firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace){
+      cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+    }
+    let parsedRaw;
+    try{
+      parsedRaw = JSON.parse(cleaned);
+    }catch(parseErr){
+      throw new Error('モデル出力の解析に失敗しました:\n' + textBlock);
+    }
+    const parsed = Array.isArray(parsedRaw) ? parsedRaw : (parsedRaw.counts || []);
+    const warnings = Array.isArray(parsedRaw) ? [] : (parsedRaw.warnings || []);
+
+    renderResults(parsed);
+    renderWarnings(warnings);
+    logAttempt(parsed, elapsed);
+    statusText.textContent = `完了(${elapsed}秒)`;
+  }catch(err){
+    statusText.textContent = 'エラー';
+    errorBox.style.display = 'block';
+    const detail = `[${err.name || 'Error'}] ${err.message || String(err)}`;
+    if(err.message === 'Failed to fetch'){
+      errorBox.textContent = detail + '\n\nEdge FunctionのURLが正しいか、CORS設定、デプロイ状態を確認してください。';
+    }else{
+      errorBox.textContent = detail;
+    }
+  }finally{
+    spinner.style.display = 'none';
+    runBtn.disabled = false;
+  }
+}
+
+function renderWarnings(warnings){
+  window._lastWarnings = warnings || [];
+  const box = document.getElementById('warningBox');
+  const list = document.getElementById('warningList');
+  if(!warnings || warnings.length === 0){
+    box.style.display = 'none';
+    return;
+  }
+  list.innerHTML = warnings.map(w => `<li>${w}</li>`).join('');
+  box.style.display = 'block';
+}
+
+function computeTotal(parsed){
+  let total = 0;
+  parsed.forEach(item => {
+    const cd = chipColors.find(c => c.name === item.color);
+    total += (cd ? cd.denom : 0) * item.count;
+  });
+  return total;
+}
+
+function renderResults(parsed){
+  const body = document.getElementById('resultBody');
+  body.innerHTML = '';
+  window._lastParsed = parsed;
+
+  parsed.forEach((item, idx) => {
+    const chipDef = chipColors.find(c => c.name === item.color);
+    const denom = chipDef ? chipDef.denom : 0;
+    const subtotal = denom * item.count;
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${item.color}${chipDef ? '' : ' <span style="color:var(--danger);font-size:11px;">(未設定)</span>'}</td>
+      <td>
+        <input type="text" inputmode="numeric" value="${formatNum(item.count)}"
+               onfocus="selectAllOnFocus(event)"
+               onblur="onCountEdit(${idx}, this.value, this)">
+      </td>
+      <td class="num">¥${formatNum(denom)}</td>
+      <td class="num" id="subtotal-${idx}">¥${formatNum(subtotal)}</td>
+    `;
+    body.appendChild(tr);
+  });
+
+  document.getElementById('grandTotal').textContent = `¥${formatNum(computeTotal(parsed))}`;
+  document.getElementById('resultSection').style.display = 'block';
+  renderScoringInputs(parsed);
+}
+
+function renderScoringInputs(parsed){
+  const container = document.getElementById('scoringInputs');
+  container.innerHTML = parsed.map((item, idx) => `
+    <div class="row2" style="margin-bottom:8px;">
+      <span style="width:60px; flex:none;">${item.color}</span>
+      <span style="color:var(--text-dim); font-size:12px; flex:none;">認識:${formatNum(item.count)}枚 →</span>
+      <input type="text" inputmode="numeric" id="truth-${idx}" placeholder="実際の枚数"
+             onfocus="selectAllOnFocus(event)">
+    </div>
+  `).join('');
+  document.getElementById('scoringSection').style.display = 'block';
+  document.getElementById('scoreResult').style.display = 'none';
+  document.getElementById('qualityIssueFlag').checked = false;
+}
+
+let trialScores = [];
+
+function scoreTrial(){
+  const parsed = window._lastParsed;
+  let colorMatchCount = 0;
+  let countErrors = [];
+  let truthTotal = 0;
+  let estTotal = 0;
+
+  parsed.forEach((item, idx) => {
+    const input = document.getElementById(`truth-${idx}`);
+    const truthCount = parseNum(input.value);
+    const chipDef = chipColors.find(c => c.name === item.color);
+    const denom = chipDef ? chipDef.denom : 0;
+
+    if(input.value.trim() !== ''){
+      const diff = Math.abs(item.count - truthCount);
+      countErrors.push(diff);
+      if(diff === 0) colorMatchCount++;
+      truthTotal += denom * truthCount;
+    } else {
+      truthTotal += denom * item.count; // 未入力は推定値をそのまま正解扱い(採点対象外)
+    }
+    estTotal += denom * item.count;
+  });
+
+  const mae = countErrors.length ? (countErrors.reduce((a,b)=>a+b,0) / countErrors.length) : null;
+  const moneyErrorPct = truthTotal > 0 ? Math.abs(estTotal - truthTotal) / truthTotal * 100 : 0;
+  const hadWarning = document.getElementById('warningBox').style.display === 'block';
+  const hadQualityIssue = document.getElementById('qualityIssueFlag').checked;
+
+  const deviceName = document.getElementById('tag-device').value.trim();
+  try{ localStorage.setItem('chip_test_device', deviceName); }catch(e){}
+
+  const score = {
+    time: new Date().toLocaleString('ja-JP'),
+    elapsed: window._lastElapsed,
+    mae,
+    moneyErrorPct,
+    corrections: correctionCount,
+    hadWarning,
+    hadQualityIssue,
+    colorAccuracy: countErrors.length ? (colorMatchCount / countErrors.length * 100) : null,
+    device: deviceName,
+    lux: document.getElementById('tag-lux').value.trim(),
+    distanceCm: document.getElementById('tag-distance').value.trim(),
+    angle: document.getElementById('tag-angle').value,
+    arrangement: document.getElementById('tag-arrangement').value,
+    placement: document.getElementById('tag-placement').value,
+    background: document.getElementById('tag-background').value,
+    shadow: document.getElementById('tag-shadow').value,
+    blur: document.getElementById('tag-blur').value,
+    darkModeEnabled: document.getElementById('darkModeToggle').checked,
+    usedRefImages: window._lastUsedRefCount > 0,
+    warningDetail: (window._lastWarnings || []).join(' / '),
+    recognizedDetail: parsed.map(p => `${p.color}:${p.count}`).join(' / ')
+  };
+  trialScores.push(score);
+  persistTrials();
+
+  const resultBox = document.getElementById('scoreResult');
+  resultBox.style.display = 'block';
+  resultBox.innerHTML = `
+    <div style="font-family:var(--mono); font-size:13px; line-height:1.8;">
+      枚数誤差(MAE): ${mae !== null ? mae.toFixed(2) + '枚' : '(未入力)'}<br>
+      金額誤差率: ${moneyErrorPct.toFixed(2)}%<br>
+      修正タップ数: ${correctionCount}回<br>
+      レイテンシ: ${window._lastElapsed}秒<br>
+      警告発火: ${hadWarning ? 'あり' : 'なし'} / 実際に問題あり(自己申告): ${hadQualityIssue ? 'あり' : 'なし'}
+    </div>
+  `;
+
+  renderAggregate();
+}
+
+function persistTrials(){
+  try{ localStorage.setItem('chip_test_trials', JSON.stringify(trialScores)); }catch(e){}
+}
+function loadTrials(){
+  try{
+    const saved = localStorage.getItem('chip_test_trials');
+    if(saved){ trialScores = JSON.parse(saved); }
+    const savedDevice = localStorage.getItem('chip_test_device');
+    if(savedDevice){ document.getElementById('tag-device').value = savedDevice; }
+  }catch(e){}
+  if(trialScores.length > 0) renderAggregate();
+}
+function resetAllData(){
+  if(!confirm(`蓄積された${trialScores.length}件のテストデータを全て削除します。よろしいですか?`)) return;
+  trialScores = [];
+  persistTrials();
+  document.getElementById('aggregateSection').style.display = 'none';
+}
+
+function exportCSV(){
+  if(trialScores.length === 0) return;
+  const headers = ['time','device','lux','distanceCm','angle','arrangement','placement','background','shadow','blur','darkModeEnabled','usedRefImages','elapsed','mae','moneyErrorPct','colorAccuracy','corrections','hadWarning','hadQualityIssue','warningDetail','recognizedDetail'];
+  const escapeCsv = (v) => {
+    const s = String(v ?? '');
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+  };
+  const rows = trialScores.map(s => headers.map(h => escapeCsv(s[h])).join(','));
+  const csv = '\uFEFF' + headers.join(',') + '\n' + rows.join('\n');
+
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `chip_test_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function renderAggregate(){
+  if(trialScores.length === 0) return;
+  const validMae = trialScores.filter(s => s.mae !== null).map(s => s.mae);
+  const avgMae = validMae.length ? (validMae.reduce((a,b)=>a+b,0)/validMae.length).toFixed(2) : '-';
+  const avgMoney = (trialScores.reduce((a,s)=>a+s.moneyErrorPct,0)/trialScores.length).toFixed(2);
+  const avgCorrections = (trialScores.reduce((a,s)=>a+s.corrections,0)/trialScores.length).toFixed(1);
+  const avgLatency = (trialScores.reduce((a,s)=>a+parseFloat(s.elapsed),0)/trialScores.length).toFixed(1);
+
+  const issueTrials = trialScores.filter(s => s.hadQualityIssue);
+  const recall = issueTrials.length ? (issueTrials.filter(s=>s.hadWarning).length / issueTrials.length * 100).toFixed(0) : '-';
+  const warnedTrials = trialScores.filter(s => s.hadWarning);
+  const precision = warnedTrials.length ? (warnedTrials.filter(s=>s.hadQualityIssue).length / warnedTrials.length * 100).toFixed(0) : '-';
+
+  document.getElementById('aggregateSection').style.display = 'block';
+  document.getElementById('aggregateStats').innerHTML = `
+    試行回数: ${trialScores.length}回<br>
+    平均枚数誤差(MAE): ${avgMae}枚<br>
+    平均金額誤差率: ${avgMoney}%<br>
+    平均修正タップ数: ${avgCorrections}回<br>
+    平均レイテンシ: ${avgLatency}秒<br>
+    警告Recall(見逃し検出率): ${recall}%<br>
+    警告Precision(誤検知の少なさ): ${precision}%
+  `;
+  document.getElementById('csvBtn').textContent = `📄 CSVダウンロード(全${trialScores.length}件)`;
+}
+
+function onCountEdit(idx, newVal, inputEl){
+  const n = parseNum(newVal);
+  const before = window._lastParsed[idx].count;
+  window._lastParsed[idx].count = n;
+  inputEl.value = formatNum(n);
+  if(n !== before) correctionCount++;
+
+  const chipDef = chipColors.find(c => c.name === window._lastParsed[idx].color);
+  const denom = chipDef ? chipDef.denom : 0;
+  document.getElementById(`subtotal-${idx}`).textContent = `¥${formatNum(denom * n)}`;
+  document.getElementById('grandTotal').textContent = `¥${formatNum(computeTotal(window._lastParsed))}`;
+}
+
+function logAttempt(parsed, elapsed){
+  const total = computeTotal(parsed);
+  window._lastElapsed = elapsed;
+  window._lastLogIndex = 0;
+  sessionLog.unshift({ time: new Date().toLocaleTimeString('ja-JP'), elapsed, total, detail: JSON.parse(JSON.stringify(parsed)), scored: false });
+  renderLog();
+}
+
+function renderLog(){
+  const list = document.getElementById('logList');
+  if(sessionLog.length === 0) return;
+  list.innerHTML = sessionLog.map(entry => `
+    <div class="log-entry">
+      <div>
+        <div>${entry.time}</div>
+        <div class="log-meta">${entry.detail.map(d => `${d.color}:${d.count}`).join(' / ')}</div>
+      </div>
+      <div style="text-align:right">
+        <div class="log-total">¥${formatNum(entry.total)}</div>
+        <div class="log-meta">${entry.elapsed}s</div>
+      </div>
+    </div>
+  `).join('');
+}
+</script>
+
+<div id="cameraModal">
+  <button class="cancel-btn" onclick="closeCamera()">✕</button>
+  <video id="cameraVideo" autoplay playsinline muted></video>
+  <div class="camera-guide" id="cameraGuide"></div>
+  <div class="camera-controls">
+    <button class="shutter-btn" onclick="triggerCapture()"></button>
+  </div>
+</div>
+
+</body>
+</html>
