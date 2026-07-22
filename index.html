@@ -606,6 +606,19 @@ function renderChipRows(){
             </div>
           </div>
         ` : ''}
+        ${c.colorLabelChecking ? `
+          <div style="font-size:11px; color:var(--gold); margin-top:4px;">🔍 色を判定中...</div>
+        ` : ''}
+        ${!c.colorLabelChecking && c.suggestedColorLabel ? `
+          <div style="display:flex; align-items:center; gap:6px; margin-top:4px; font-size:11px;">
+            <span style="width:12px; height:12px; border-radius:50%; background:${c.detectedColor || '#888'}; border:1px solid var(--panel-line); flex-shrink:0;"></span>
+            <span style="color:var(--text-dim);">AI推定の色名: <b style="color:${c.suggestedColorLabel.trim() === c.name.trim() ? 'var(--felt-bright)' : 'var(--gold)'};">${c.suggestedColorLabel}</b></span>
+            ${c.suggestedColorLabel.trim() !== c.name.trim() ? `
+              <button class="rm-btn" style="font-size:10px; border:1px solid var(--gold); color:var(--gold); border-radius:6px; padding:2px 8px;"
+                      onclick="acceptSuggestedColorLabel(${i})">この名前に修正</button>
+            ` : ''}
+          </div>
+        ` : ''}
       </div>
       <button class="rm-btn" onclick="removeChip(${i})">✕</button>
     `;
@@ -639,8 +652,69 @@ function setRefResult(i, result){
   chipColors[i].detectedColor = result.dominantColor || null;
   renderChipRows();
   detectDenomination(i);
+  detectColorLabel(i);
 }
 renderChipRows();
+
+// ---- 色の言語表記を自動判定(登録名との相違チェック用) ----
+async function detectColorLabel(i){
+  const endpoint = document.getElementById('endpointInput').value.trim();
+  const secret = document.getElementById('secretInput').value.trim();
+  if(!endpoint) return;
+
+  const chip = chipColors[i];
+  if(!chip || !chip.refBase64) return;
+
+  chip.colorLabelChecking = true;
+  renderChipRows();
+
+  try{
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(secret ? { "x-app-secret": secret } : {})
+      },
+      body: JSON.stringify({
+        max_tokens: 100,
+        system: `画像に写っているポーカーチップの面(中心の無地部分)の色を、一般的な日本語の色名で1つだけ答えてください。
+縁の模様や斑点は無視し、面の地色のみで判断してください。
+出力は必ず次のJSON形式のみで返してください。説明文は不要です。
+{"color_label": "色名(例: 赤、青、黒、白、オフホワイト、緑、黄色、紺、紫など)"}`,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: chip.refMime, data: chip.refBase64 } },
+            { type: "text", text: "このチップの面の色を日本語で答えてください。" }
+          ]
+        }]
+      })
+    });
+    const data = await response.json();
+    if(data.error) throw new Error(data.error);
+
+    const textBlock = (data.content || []).map(b => b.text || '').join('');
+    let cleaned = textBlock.replace(/```json|```/g, '').trim();
+    const fb = cleaned.indexOf('{'), lb = cleaned.lastIndexOf('}');
+    if(fb !== -1 && lb !== -1) cleaned = cleaned.slice(fb, lb + 1);
+    const parsed = JSON.parse(cleaned);
+
+    if(parsed.color_label){
+      chip.suggestedColorLabel = parsed.color_label;
+    }
+  }catch(err){
+    // 失敗しても登録済みの名前をそのまま使うだけなので何もしない
+  }finally{
+    chip.colorLabelChecking = false;
+    renderChipRows();
+  }
+}
+function acceptSuggestedColorLabel(i){
+  const chip = chipColors[i];
+  if(!chip || !chip.suggestedColorLabel) return;
+  chip.name = chip.suggestedColorLabel;
+  renderChipRows();
+}
 
 // ---- 額面の自動判定(チップ面に印字された数字をAIが読み取る) ----
 async function detectDenomination(i){
