@@ -535,7 +535,9 @@ function renderChipRows(){
           <input type="text" inputmode="numeric" value="${formatNum(c.denom)}"
                  onfocus="selectAllOnFocus(event)"
                  onblur="updateChipDenom(${i}, this.value, this)">
-          ${!c.refBase64 ? '<span class="badge-noref">参照写真未登録</span>' : ''}
+          ${c.denomDetecting ? '<span class="badge-noref" style="color:var(--gold);">🔍判定中...</span>' : ''}
+          ${!c.denomDetecting && c.denomAutoDetected ? '<span class="badge-noref" style="color:var(--felt-bright);">🔍自動検出</span>' : ''}
+          ${!c.denomDetecting && !c.refBase64 ? '<span class="badge-noref">参照写真未登録</span>' : ''}
         </div>
       </div>
       <button class="rm-btn" onclick="removeChip(${i})">✕</button>
@@ -547,10 +549,11 @@ function updateChipName(i, val){ chipColors[i].name = val; }
 function updateChipDenom(i, val, inputEl){
   const n = parseNum(val);
   chipColors[i].denom = n;
+  chipColors[i].denomAutoDetected = false; // 手動修正したら自動検出バッジは消す
   inputEl.value = formatNum(n);
 }
 function removeChip(i){ chipColors.splice(i,1); renderChipRows(); }
-function addChipRow(){ chipColors.push({name:'', denom:0, refBase64:null, refMime:null, refThumb:null}); renderChipRows(); }
+function addChipRow(){ chipColors.push({name:'', denom:0, refBase64:null, refMime:null, refThumb:null, denomAutoDetected:false, denomDetecting:false}); renderChipRows(); }
 
 async function onRefFileSelected(i, e){
   const file = e.target.files[0];
@@ -567,8 +570,65 @@ function setRefResult(i, result){
   chipColors[i].refMime = result.mime;
   chipColors[i].refThumb = result.dataUrl;
   renderChipRows();
+  detectDenomination(i);
 }
 renderChipRows();
+
+// ---- 額面の自動判定(チップ面に印字された数字をAIが読み取る) ----
+async function detectDenomination(i){
+  const endpoint = document.getElementById('endpointInput').value.trim();
+  const secret = document.getElementById('secretInput').value.trim();
+  if(!endpoint) return; // エンドポイント未設定なら自動検出はスキップ(手動入力のみ)
+
+  const chip = chipColors[i];
+  if(!chip || !chip.refBase64) return;
+
+  chip.denomDetecting = true;
+  renderChipRows();
+
+  try{
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(secret ? { "x-app-secret": secret } : {})
+      },
+      body: JSON.stringify({
+        max_tokens: 100,
+        system: `画像に写っているポーカーチップの面に印字されている「額面の数字」だけを読み取ってください。
+色だけで数字の印字が無いチップの場合は検出不可として扱ってください。
+出力は必ず次のJSON形式のみで返してください。説明文は一切不要です。
+{"denom": 数値 または null, "confident": true または false}
+数字が判読しづらい、複数の数字が候補にある、印字が無い、などの場合は confident を false にしてください。`,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: chip.refMime, data: chip.refBase64 } },
+            { type: "text", text: "このチップの面に印字された額面の数字を読み取ってください。" }
+          ]
+        }]
+      })
+    });
+    const data = await response.json();
+    if(data.error) throw new Error(data.error);
+
+    const textBlock = (data.content || []).map(b => b.text || '').join('');
+    let cleaned = textBlock.replace(/```json|```/g, '').trim();
+    const fb = cleaned.indexOf('{'), lb = cleaned.lastIndexOf('}');
+    if(fb !== -1 && lb !== -1) cleaned = cleaned.slice(fb, lb + 1);
+    const parsed = JSON.parse(cleaned);
+
+    if(parsed.confident && typeof parsed.denom === 'number' && parsed.denom > 0){
+      chip.denom = parsed.denom;
+      chip.denomAutoDetected = true;
+    }
+  }catch(err){
+    // 自動検出に失敗しても、手動入力にフォールバックするだけなので何もしない
+  }finally{
+    chip.denomDetecting = false;
+    renderChipRows();
+  }
+}
 
 // ---- ターゲット写真 ----
 function applyTargetResult(result){
