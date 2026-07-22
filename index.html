@@ -261,12 +261,44 @@
   </table>
 </section>
 
-<section id="scoringSection" style="display:none">
-  <h2><span class="step-num">4</span>正解入力 + 撮影条件タグ → 自動採点</h2>
-  <div class="hint" style="margin-bottom:10px;">実際にチップを数えた正しい枚数を入力してください。認識精度・金額誤差率を自動計算します。</div>
-  <div id="scoringInputs"></div>
+<section id="testCaseSection" style="display:none">
+  <h2><span class="step-num">4</span>テストケース(物理的なチップ配置)</h2>
+  <div class="hint" style="margin-bottom:10px;">同じチップの並べ方のまま照明だけ変える等、再撮影する場合は既存のテストケースを選んでください。正解値(ground truth)は再入力不要になります。</div>
+  <select id="testCaseSelect" onchange="onTestCaseSelectChange()" style="width:100%; margin-bottom:10px;">
+    <option value="__new__">+ 新規テストケースとして登録</option>
+  </select>
 
-  <div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--panel-line);">
+  <div id="newTestCasePanel">
+    <div class="row2" style="margin-bottom:8px;">
+      <span style="width:90px; flex:none; font-size:13px;">チップセット</span>
+      <input type="text" id="tc-chipset" placeholder="例: mugenbo 100PCS">
+    </div>
+    <div class="row2" style="margin-bottom:8px;">
+      <span style="width:90px; flex:none; font-size:13px;">チップ状態</span>
+      <select id="tag-arrangement">
+        <option value="整列">整列</option>
+        <option value="やや傾き">やや傾き</option>
+        <option value="崩れ">崩れ・バラ山</option>
+      </select>
+    </div>
+    <div class="row2" style="margin-bottom:8px;">
+      <span style="width:90px; flex:none; font-size:13px;">配置</span>
+      <select id="tag-placement">
+        <option value="横一列(間隔あり)">横一列(間隔あり)</option>
+        <option value="密集">密集</option>
+        <option value="一部重なり">一部重なり</option>
+      </select>
+    </div>
+    <div id="scoringInputs"></div>
+  </div>
+
+  <div id="existingTestCaseInfo" style="display:none; font-size:12px; color:var(--text-dim); background:var(--panel); border-radius:8px; padding:10px;"></div>
+</section>
+
+<section id="scoringSection" style="display:none">
+  <h2><span class="step-num">5</span>撮影条件タグ → 自動採点</h2>
+
+  <div style="padding-top:0;">
     <div class="hint" style="margin-bottom:10px;"><b>撮影条件タグ</b>(再現性のある検証のため、できるだけ数値・実測で記録)</div>
 
     <div class="row2" style="margin-bottom:8px;">
@@ -288,22 +320,6 @@
         <option value="90(真上)">90°(真上)</option>
         <option value="45">45°</option>
         <option value="20(ほぼ真横)">20°(ほぼ真横)</option>
-      </select>
-    </div>
-    <div class="row2" style="margin-bottom:8px;">
-      <span style="width:90px; flex:none; font-size:13px;">チップ状態</span>
-      <select id="tag-arrangement">
-        <option value="整列">整列</option>
-        <option value="やや傾き">やや傾き</option>
-        <option value="崩れ">崩れ・バラ山</option>
-      </select>
-    </div>
-    <div class="row2" style="margin-bottom:8px;">
-      <span style="width:90px; flex:none; font-size:13px;">配置</span>
-      <select id="tag-placement">
-        <option value="横一列(間隔あり)">横一列(間隔あり)</option>
-        <option value="密集">密集</option>
-        <option value="一部重なり">一部重なり</option>
       </select>
     </div>
     <div class="row2" style="margin-bottom:8px;">
@@ -329,6 +345,16 @@
         <option value="なし">なし</option>
         <option value="手ブレ">手ブレ</option>
         <option value="ピンボケ">ピンボケ(AF失敗)</option>
+      </select>
+    </div>
+    <div class="row2" style="margin-bottom:8px;">
+      <span style="width:90px; flex:none; font-size:13px;">失敗段階</span>
+      <select id="primaryFailureStage">
+        <option value="none">問題なし</option>
+        <option value="detection">detection(枚数の検出漏れ)</option>
+        <option value="classification">classification(色の誤分類)</option>
+        <option value="counting">counting(段差カウント誤差)</option>
+        <option value="value_mapping">value_mapping(額面変換の誤り)</option>
       </select>
     </div>
   </div>
@@ -378,6 +404,8 @@ let targetMime = null;
 let sessionLog = [];
 let correctionCount = 0;
 let trialScores = [];
+const APP_VERSION = "poc-0.1";
+const EXPERIMENT_ID = "chip-vision-poc";
 
 function saveEndpoint(url){
   try{ localStorage.setItem('chipvision_endpoint', url); }catch(e){}
@@ -659,6 +687,7 @@ async function detectDenomination(i){
 function applyTargetResult(result){
   targetBase64 = result.base64;
   targetMime = result.mime;
+  window._lastTargetDims = { w: result.w, h: result.h };
   const preview = document.getElementById('preview');
   preview.src = result.dataUrl;
   preview.style.display = 'block';
@@ -1059,10 +1088,59 @@ function renderScoringInputs(parsed){
              onfocus="selectAllOnFocus(event)">
     </div>
   `).join('');
+  document.getElementById('testCaseSection').style.display = 'block';
   document.getElementById('scoringSection').style.display = 'block';
   document.getElementById('scoreResult').style.display = 'none';
   document.getElementById('qualityIssueFlag').checked = false;
+  document.getElementById('testCaseSelect').value = '__new__';
+  onTestCaseSelectChange();
+  refreshTestCaseOptions();
   tryAutoLux();
+}
+
+// ---- テストケース(物理配置)の選択・新規登録UI ----
+let testCaseCache = {}; // test_case_id -> test_case object(ground_truthの再利用のため)
+
+async function refreshTestCaseOptions(){
+  const endpoint = document.getElementById('endpointInput').value.trim();
+  if(!endpoint) return;
+  try{
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: dbHeaders(),
+      body: JSON.stringify({ req_type: "list_test_cases" })
+    });
+    const data = await response.json();
+    if(data.error) throw new Error(data.error);
+    const select = document.getElementById('testCaseSelect');
+    const currentVal = select.value;
+    select.innerHTML = '<option value="__new__">+ 新規テストケースとして登録</option>';
+    (data.test_cases || []).forEach(tc => {
+      testCaseCache[tc.test_case_id] = tc;
+      const opt = document.createElement('option');
+      opt.value = tc.test_case_id;
+      opt.textContent = `${tc.chip_set_id || '(未入力)'} / ${tc.arrangement || '-'} / ${tc.placement || '-'} (${tc.test_case_id.slice(0,8)})`;
+      select.appendChild(opt);
+    });
+    select.value = currentVal && testCaseCache[currentVal] ? currentVal : '__new__';
+  }catch(err){
+    // 一覧取得に失敗しても新規登録は引き続き可能なので、ここでは静かに無視
+  }
+}
+
+function onTestCaseSelectChange(){
+  const val = document.getElementById('testCaseSelect').value;
+  const isNew = val === '__new__';
+  document.getElementById('newTestCasePanel').style.display = isNew ? 'block' : 'none';
+  const infoBox = document.getElementById('existingTestCaseInfo');
+  if(isNew){
+    infoBox.style.display = 'none';
+  }else{
+    const tc = testCaseCache[val];
+    infoBox.style.display = 'block';
+    const gt = tc?.ground_truth?.detail || {};
+    infoBox.innerHTML = `既存の正解値を再利用します:<br>${Object.entries(gt).map(([k,v])=>`${k}: ${v.count}枚`).join(' / ') || '(正解値未登録)'}`;
+  }
 }
 
 // ---- 照度の自動取得(対応端末のみ。非対応の場合は何もせず手動入力にフォールバック) ----
@@ -1092,76 +1170,145 @@ function tryAutoLux(){
 
 async function scoreTrial(){
   const parsed = window._lastParsed;
+  const testCaseSelectVal = document.getElementById('testCaseSelect').value;
+  const isNewTestCase = testCaseSelectVal === '__new__';
+
   let colorMatchCount = 0;
   let countErrors = [];
   let truthTotal = 0;
   let estTotal = 0;
+  const groundTruthDetail = {};
 
   parsed.forEach((item, idx) => {
-    const input = document.getElementById(`truth-${idx}`);
-    const truthCount = parseNum(input.value);
     const chipDef = chipColors.find(c => c.name === item.color);
     const denom = chipDef ? chipDef.denom : 0;
+    let truthCount = null;
 
-    if(input.value.trim() !== ''){
+    if(isNewTestCase){
+      const input = document.getElementById(`truth-${idx}`);
+      if(input && input.value.trim() !== ''){
+        truthCount = parseNum(input.value);
+        groundTruthDetail[item.color] = { count: truthCount, unit_value: denom };
+      }
+    }else{
+      const existingGt = testCaseCache[testCaseSelectVal]?.ground_truth?.detail || {};
+      if(existingGt[item.color]) truthCount = existingGt[item.color].count;
+    }
+
+    if(truthCount !== null){
       const diff = Math.abs(item.count - truthCount);
       countErrors.push(diff);
       if(diff === 0) colorMatchCount++;
       truthTotal += denom * truthCount;
-    } else {
-      truthTotal += denom * item.count; // 未入力は推定値をそのまま正解扱い(採点対象外)
+    }else{
+      truthTotal += denom * item.count;
     }
     estTotal += denom * item.count;
   });
 
   const mae = countErrors.length ? (countErrors.reduce((a,b)=>a+b,0) / countErrors.length) : null;
   const moneyErrorPct = truthTotal > 0 ? Math.abs(estTotal - truthTotal) / truthTotal * 100 : 0;
+  const colorAccuracy = countErrors.length ? (colorMatchCount / countErrors.length * 100) : null;
   const hadWarning = document.getElementById('warningBox').style.display === 'block';
   const hadQualityIssue = document.getElementById('qualityIssueFlag').checked;
+  const failureStage = document.getElementById('primaryFailureStage').value;
 
   const deviceName = document.getElementById('tag-device').value.trim();
   try{ localStorage.setItem('chip_test_device', deviceName); }catch(e){}
-
-  const trial = {
-    device: deviceName,
-    lux: document.getElementById('tag-lux').value.trim(),
-    distance_cm: document.getElementById('tag-distance').value.trim(),
-    angle: document.getElementById('tag-angle').value,
-    arrangement: document.getElementById('tag-arrangement').value,
-    placement: document.getElementById('tag-placement').value,
-    background: document.getElementById('tag-background').value,
-    shadow: document.getElementById('tag-shadow').value,
-    blur: document.getElementById('tag-blur').value,
-    dark_mode_enabled: document.getElementById('darkModeToggle').checked,
-    used_ref_images: window._lastUsedRefCount > 0,
-    elapsed_sec: window._lastElapsed,
-    mae: mae,
-    money_error_pct: moneyErrorPct,
-    color_accuracy: countErrors.length ? (colorMatchCount / countErrors.length * 100) : null,
-    corrections: correctionCount,
-    had_warning: hadWarning,
-    had_quality_issue: hadQualityIssue,
-    warning_detail: (window._lastWarnings || []).join(' / '),
-    recognized_detail: parsed.map(p => `${p.color}:${p.count}`).join(' / ')
-  };
 
   const resultBox = document.getElementById('scoreResult');
   resultBox.style.display = 'block';
   resultBox.innerHTML = `<div style="font-family:var(--mono); font-size:13px;">共有データベースに保存中...</div>`;
 
   try{
-    await saveTrialToServer(trial);
+    // 1. test_case: 新規なら作成、既存ならそのIDを使う
+    let testCaseId = testCaseSelectVal;
+    if(isNewTestCase){
+      const totalTruthCount = Object.values(groundTruthDetail).reduce((a,v)=>a+v.count,0);
+      const { test_case } = await callDb("save_test_case", {
+        test_case: {
+          chip_set_id: document.getElementById('tc-chipset').value.trim(),
+          arrangement: document.getElementById('tag-arrangement').value,
+          placement: document.getElementById('tag-placement').value,
+          ground_truth: { detail: groundTruthDetail, total_count: totalTruthCount, total_amount: truthTotal }
+        }
+      });
+      testCaseId = test_case.test_case_id;
+      testCaseCache[testCaseId] = test_case;
+    }
+
+    // 2. capture: 撮影1回分の条件を記録
+    const { capture } = await callDb("save_capture", {
+      capture: {
+        test_case_id: testCaseId,
+        tester_id: deviceName,
+        device: deviceName,
+        os_version: navigator.userAgent,
+        app_version: APP_VERSION,
+        resolution_width: window._lastTargetDims?.w || null,
+        resolution_height: window._lastTargetDims?.h || null,
+        image_ref: null,
+        capture_conditions: {
+          lux: document.getElementById('tag-lux').value.trim(),
+          distance_cm: document.getElementById('tag-distance').value.trim(),
+          angle_deg: document.getElementById('tag-angle').value,
+          background_type: document.getElementById('tag-background').value,
+          shadow_level: document.getElementById('tag-shadow').value,
+          blur_level: document.getElementById('tag-blur').value,
+          dark_mode_enabled: document.getElementById('darkModeToggle').checked,
+          used_ref_images: window._lastUsedRefCount > 0
+        }
+      }
+    });
+
+    // 3. inference: 認識結果とA/B用メタ情報を記録
+    await callDb("save_inference", {
+      inference: {
+        capture_id: capture.capture_id,
+        experiment_id: EXPERIMENT_ID,
+        ab_group: "A",
+        model_variant: "claude-sonnet-4-6",
+        model_version: APP_VERSION,
+        recognition_result: {
+          detail: Object.fromEntries(parsed.map(p => [p.color, { count: p.count, unit_value: (chipColors.find(c=>c.name===p.color)?.denom || 0) }])),
+          total_count: parsed.reduce((a,p)=>a+p.count,0),
+          total_amount: estTotal,
+          mean_confidence: null,
+          inference_time_ms: Math.round(parseFloat(window._lastElapsed) * 1000)
+        },
+        quality_warning_evaluation: [{
+          issue_type: "general",
+          confidence: null,
+          warned: hadWarning,
+          actual_issue: hadQualityIssue,
+          result: hadWarning && hadQualityIssue ? "TP" : (!hadWarning && !hadQualityIssue ? "TN" : (hadWarning && !hadQualityIssue ? "FP" : "FN"))
+        }],
+        failure_analysis: {
+          primary_failure_stage: failureStage,
+          failure_type: [],
+          notes: (window._lastWarnings || []).join(' / ')
+        },
+        ux: {
+          elapsed_sec_capture: null,
+          elapsed_sec_processing: parseFloat(window._lastElapsed),
+          elapsed_sec_review: null,
+          corrections_count: correctionCount
+        }
+      }
+    });
+
     resultBox.innerHTML = `
       <div style="font-family:var(--mono); font-size:13px; line-height:1.8;">
-        枚数誤差(MAE): ${mae !== null ? mae.toFixed(2) + '枚' : '(未入力)'}<br>
+        枚数誤差(MAE): ${mae !== null ? mae.toFixed(2) + '枚' : '(正解値なし)'}<br>
         金額誤差率: ${moneyErrorPct.toFixed(2)}%<br>
         修正タップ数: ${correctionCount}回<br>
         レイテンシ: ${window._lastElapsed}秒<br>
         警告発火: ${hadWarning ? 'あり' : 'なし'} / 実際に問題あり(自己申告): ${hadQualityIssue ? 'あり' : 'なし'}<br>
-        <span style="color:var(--felt-bright)">✓ 共有データベースに保存しました</span>
+        <span style="color:var(--felt-bright)">✓ 共有データベースに保存しました(test_case → capture → inference)</span>
       </div>
     `;
     await loadTrialsFromServer();
+    await refreshTestCaseOptions();
   }catch(err){
     resultBox.innerHTML = `<div style="color:var(--danger); font-size:13px;">保存に失敗しました: ${err.message}</div>`;
   }
@@ -1175,30 +1322,22 @@ function dbHeaders(){
     ...(secret ? { "x-app-secret": secret } : {})
   };
 }
-async function saveTrialToServer(trial){
+async function callDb(reqType, payload){
   const endpoint = document.getElementById('endpointInput').value.trim();
   if(!endpoint) throw new Error('Edge Function URLが未設定です');
   const response = await fetch(endpoint, {
     method: "POST",
     headers: dbHeaders(),
-    body: JSON.stringify({ req_type: "save_trial", trial })
+    body: JSON.stringify({ req_type: reqType, ...payload })
   });
   const data = await response.json();
   if(data.error) throw new Error(data.error);
-  return data.trial;
+  return data;
 }
 async function loadTrialsFromServer(){
-  const endpoint = document.getElementById('endpointInput').value.trim();
-  if(!endpoint) return;
   try{
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: dbHeaders(),
-      body: JSON.stringify({ req_type: "list_trials" })
-    });
-    const data = await response.json();
-    if(data.error) throw new Error(data.error);
-    trialScores = data.trials || [];
+    const data = await callDb("list_full", {});
+    trialScores = data.inferences || [];
     if(trialScores.length > 0) renderAggregate();
   }catch(err){
     const box = document.getElementById('errorBox');
@@ -1206,22 +1345,10 @@ async function loadTrialsFromServer(){
     box.textContent = `共有データベースからの取得に失敗しました: ${err.message}`;
   }
 }
-async function deleteAllTrialsOnServer(){
-  const endpoint = document.getElementById('endpointInput').value.trim();
-  if(!endpoint) return;
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: dbHeaders(),
-    body: JSON.stringify({ req_type: "delete_all_trials" })
-  });
-  const data = await response.json();
-  if(data.error) throw new Error(data.error);
-}
-
 async function resetAllData(){
-  if(!confirm(`共有データベース上の全端末分のテストデータ(${trialScores.length}件)を完全に削除します。よろしいですか?`)) return;
+  if(!confirm(`共有データベース上の全端末分のテストデータ(${trialScores.length}件、関連するテストケースも含む)を完全に削除します。よろしいですか?`)) return;
   try{
-    await deleteAllTrialsOnServer();
+    await callDb("delete_all", {});
     trialScores = [];
     document.getElementById('aggregateSection').style.display = 'none';
   }catch(err){
@@ -1229,14 +1356,70 @@ async function resetAllData(){
   }
 }
 
+// ---- ground_truth vs recognition_result からmetricsを都度算出する(スキーマ方針通り、保存はしない) ----
+function computeMetrics(inf){
+  const gt = inf.capture?.test_case?.ground_truth?.detail || {};
+  const rec = inf.recognition_result?.detail || {};
+  let countErrors = [], colorMatch = 0, truthTotal = 0, estTotal = 0;
+
+  Object.entries(rec).forEach(([color, r]) => {
+    estTotal += (r.unit_value || 0) * (r.count || 0);
+    if(gt[color]){
+      const diff = Math.abs(r.count - gt[color].count);
+      countErrors.push(diff);
+      if(diff === 0) colorMatch++;
+      truthTotal += (r.unit_value || 0) * gt[color].count;
+    }else{
+      truthTotal += (r.unit_value || 0) * (r.count || 0);
+    }
+  });
+
+  return {
+    mae: countErrors.length ? countErrors.reduce((a,b)=>a+b,0)/countErrors.length : null,
+    money_error_pct: truthTotal > 0 ? Math.abs(estTotal - truthTotal) / truthTotal * 100 : 0,
+    color_accuracy: countErrors.length ? (colorMatch/countErrors.length*100) : null
+  };
+}
+
 function exportCSV(){
   if(trialScores.length === 0) return;
-  const headers = ['tested_at','device','lux','distance_cm','angle','arrangement','placement','background','shadow','blur','dark_mode_enabled','used_ref_images','elapsed_sec','mae','money_error_pct','color_accuracy','corrections','had_warning','had_quality_issue','warning_detail','recognized_detail'];
+  const headers = ['tested_at','device','test_case_id','chip_set_id','arrangement','placement','lux','distance_cm','angle_deg','background_type','shadow_level','blur_level','elapsed_sec','mae','money_error_pct','color_accuracy','corrections','had_warning','had_quality_issue','primary_failure_stage','notes'];
   const escapeCsv = (v) => {
     const s = String(v ?? '');
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
   };
-  const rows = trialScores.map(s => headers.map(h => escapeCsv(s[h])).join(','));
+  const rows = trialScores.map(inf => {
+    const cap = inf.capture || {};
+    const tc = cap.test_case || {};
+    const cc = cap.capture_conditions || {};
+    const qw = (inf.quality_warning_evaluation || [])[0] || {};
+    const fa = inf.failure_analysis || {};
+    const m = computeMetrics(inf);
+    const row = {
+      tested_at: cap.tested_at,
+      device: cap.device,
+      test_case_id: tc.test_case_id,
+      chip_set_id: tc.chip_set_id,
+      arrangement: tc.arrangement,
+      placement: tc.placement,
+      lux: cc.lux,
+      distance_cm: cc.distance_cm,
+      angle_deg: cc.angle_deg,
+      background_type: cc.background_type,
+      shadow_level: cc.shadow_level,
+      blur_level: cc.blur_level,
+      elapsed_sec: inf.ux?.elapsed_sec_processing,
+      mae: m.mae,
+      money_error_pct: m.money_error_pct,
+      color_accuracy: m.color_accuracy,
+      corrections: inf.ux?.corrections_count,
+      had_warning: qw.warned,
+      had_quality_issue: qw.actual_issue,
+      primary_failure_stage: fa.primary_failure_stage,
+      notes: fa.notes
+    };
+    return headers.map(h => escapeCsv(row[h])).join(',');
+  });
   const csv = '\uFEFF' + headers.join(',') + '\n' + rows.join('\n');
 
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -1252,24 +1435,32 @@ function exportCSV(){
 
 function renderAggregate(){
   if(trialScores.length === 0) return;
-  const validMae = trialScores.filter(s => s.mae !== null && s.mae !== undefined).map(s => s.mae);
-  const avgMae = validMae.length ? (validMae.reduce((a,b)=>a+Number(b),0)/validMae.length).toFixed(2) : '-';
-  const avgMoney = (trialScores.reduce((a,s)=>a+Number(s.money_error_pct||0),0)/trialScores.length).toFixed(2);
-  const avgCorrections = (trialScores.reduce((a,s)=>a+Number(s.corrections||0),0)/trialScores.length).toFixed(1);
-  const avgLatency = (trialScores.reduce((a,s)=>a+parseFloat(s.elapsed_sec||0),0)/trialScores.length).toFixed(1);
+  const metrics = trialScores.map(inf => ({ inf, m: computeMetrics(inf) }));
 
-  const issueTrials = trialScores.filter(s => s.had_quality_issue);
-  const recall = issueTrials.length ? (issueTrials.filter(s=>s.had_warning).length / issueTrials.length * 100).toFixed(0) : '-';
-  const warnedTrials = trialScores.filter(s => s.had_warning);
-  const precision = warnedTrials.length ? (warnedTrials.filter(s=>s.had_quality_issue).length / warnedTrials.length * 100).toFixed(0) : '-';
+  const validMae = metrics.filter(x => x.m.mae !== null).map(x => x.m.mae);
+  const avgMae = validMae.length ? (validMae.reduce((a,b)=>a+b,0)/validMae.length).toFixed(2) : '-';
+  const avgMoney = (metrics.reduce((a,x)=>a+x.m.money_error_pct,0)/metrics.length).toFixed(2);
+  const avgCorrections = (trialScores.reduce((a,inf)=>a+Number(inf.ux?.corrections_count||0),0)/trialScores.length).toFixed(1);
+  const avgLatency = (trialScores.reduce((a,inf)=>a+Number(inf.ux?.elapsed_sec_processing||0),0)/trialScores.length).toFixed(1);
+
+  const qwList = trialScores.map(inf => (inf.quality_warning_evaluation||[])[0] || {});
+  const issueTrials = qwList.filter(q => q.actual_issue);
+  const recall = issueTrials.length ? (issueTrials.filter(q=>q.warned).length / issueTrials.length * 100).toFixed(0) : '-';
+  const warnedTrials = qwList.filter(q => q.warned);
+  const precision = warnedTrials.length ? (warnedTrials.filter(q=>q.actual_issue).length / warnedTrials.length * 100).toFixed(0) : '-';
 
   const deviceCounts = {};
-  trialScores.forEach(s => { deviceCounts[s.device || '(未入力)'] = (deviceCounts[s.device || '(未入力)']||0)+1; });
+  trialScores.forEach(inf => {
+    const d = inf.capture?.device || '(未入力)';
+    deviceCounts[d] = (deviceCounts[d]||0)+1;
+  });
   const deviceSummary = Object.entries(deviceCounts).map(([d,c]) => `${d}:${c}件`).join(' / ');
+
+  const testCaseCount = new Set(trialScores.map(inf => inf.capture?.test_case_id)).size;
 
   document.getElementById('aggregateSection').style.display = 'block';
   document.getElementById('aggregateStats').innerHTML = `
-    試行回数(全端末合計): ${trialScores.length}回<br>
+    試行回数(全端末合計): ${trialScores.length}回 / テストケース数: ${testCaseCount}件<br>
     端末別内訳: ${deviceSummary}<br>
     平均枚数誤差(MAE): ${avgMae}枚<br>
     平均金額誤差率: ${avgMoney}%<br>
