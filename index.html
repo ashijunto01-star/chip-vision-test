@@ -372,6 +372,7 @@ let targetBase64 = null;
 let targetMime = null;
 let sessionLog = [];
 let correctionCount = 0;
+let trialScores = [];
 
 function saveEndpoint(url){
   try{ localStorage.setItem('chipvision_endpoint', url); }catch(e){}
@@ -828,8 +829,6 @@ function renderScoringInputs(parsed){
   document.getElementById('scoreResult').style.display = 'none';
   document.getElementById('qualityIssueFlag').checked = false;
 }
-
-let trialScores = [];
 
 function scoreTrial(){
   const parsed = window._lastParsed;
