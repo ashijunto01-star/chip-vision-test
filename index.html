@@ -591,6 +591,15 @@ function renderChipRows(){
           ${!c.denomDetecting && c.denomAutoDetected ? '<span class="badge-noref" style="color:var(--felt-bright);">🔍自動検出</span>' : ''}
           ${!c.denomDetecting && !c.refBase64 ? '<span class="badge-noref">参照写真未登録</span>' : ''}
         </div>
+        ${c.pendingDenom !== undefined ? `
+          <div style="background:var(--panel); border:1px solid var(--gold); border-radius:8px; padding:8px 10px; margin-top:6px; font-size:12px;">
+            画像内に「${c.pendingVisibleText}」という印字を検出しました。額面を¥${formatNum(c.pendingDenom)}に設定しますか?
+            <div style="display:flex; gap:8px; margin-top:6px;">
+              <button class="rm-btn" style="border:1px solid var(--felt-bright); color:var(--felt-bright); border-radius:6px; padding:3px 10px;" onclick="confirmPendingDenom(${i})">はい、反映する</button>
+              <button class="rm-btn" style="border:1px solid var(--panel-line); color:var(--text-dim); border-radius:6px; padding:3px 10px;" onclick="rejectPendingDenom(${i})">いいえ</button>
+            </div>
+          </div>
+        ` : ''}
       </div>
       <button class="rm-btn" onclick="removeChip(${i})">✕</button>
     `;
@@ -648,11 +657,17 @@ async function detectDenomination(i){
       },
       body: JSON.stringify({
         max_tokens: 100,
-        system: `画像に写っているポーカーチップの面に印字されている「額面の数字」だけを読み取ってください。
-色だけで数字の印字が無いチップの場合は検出不可として扱ってください。
+        system: `画像に写っているポーカーチップの面に、実際に判読可能な「額面の数字(印字された文字・数字)」が存在するかどうかだけを確認してください。
+
+重要な禁止事項:
+- 「赤=100、青=500、黒=1000」のような、ポーカーチップの一般的・慣習的な額面パターンを知識として当てはめることは絶対に禁止します。
+- 画像内に実際にその数字が視覚的に、はっきりと印字されているのを確認できた場合のみ、その数字を返してください。
+- 色や見た目の印象から額面を推測することは、たとえ「よくあるパターン」だとしても不正解として扱われます。
+
 出力は必ず次のJSON形式のみで返してください。説明文は一切不要です。
-{"denom": 数値 または null, "confident": true または false}
-数字が判読しづらい、複数の数字が候補にある、印字が無い、などの場合は confident を false にしてください。`,
+{"denom": 数値 または null, "confident": true または false, "visible_text": "実際に画像内で確認できた文字・数字をそのまま(何も見えなければ空文字)"}
+
+confidentをtrueにしてよいのは、visible_textに具体的な数字が実際に写っている場合のみです。色のみで数字の印字が一切ない場合は、denomをnull、confidentをfalse、visible_textを空文字にしてください。`,
         messages: [{
           role: "user",
           content: [
@@ -671,9 +686,9 @@ async function detectDenomination(i){
     if(fb !== -1 && lb !== -1) cleaned = cleaned.slice(fb, lb + 1);
     const parsed = JSON.parse(cleaned);
 
-    if(parsed.confident && typeof parsed.denom === 'number' && parsed.denom > 0){
-      chip.denom = parsed.denom;
-      chip.denomAutoDetected = true;
+    if(parsed.confident && typeof parsed.denom === 'number' && parsed.denom > 0 && parsed.visible_text){
+      chip.pendingDenom = parsed.denom;
+      chip.pendingVisibleText = parsed.visible_text;
     }
   }catch(err){
     // 自動検出に失敗しても、手動入力にフォールバックするだけなので何もしない
@@ -681,6 +696,23 @@ async function detectDenomination(i){
     chip.denomDetecting = false;
     renderChipRows();
   }
+}
+
+function confirmPendingDenom(i){
+  const chip = chipColors[i];
+  if(!chip || chip.pendingDenom === undefined) return;
+  chip.denom = chip.pendingDenom;
+  chip.denomAutoDetected = true;
+  chip.pendingDenom = undefined;
+  chip.pendingVisibleText = undefined;
+  renderChipRows();
+}
+function rejectPendingDenom(i){
+  const chip = chipColors[i];
+  if(!chip) return;
+  chip.pendingDenom = undefined;
+  chip.pendingVisibleText = undefined;
+  renderChipRows();
 }
 
 // ---- ターゲット写真 ----
