@@ -383,6 +383,23 @@
   </div>
 </section>
 
+<section id="calibrationSection" style="display:none">
+  <h2>Confidence キャリブレーション検証</h2>
+  <div class="hint" style="margin-bottom:10px;">申告されたconfidenceの帯ごとに、実際の色的中率を集計。理想は「自動採用」帯の的中率が最も高く、「再撮影推奨」帯ほど低いこと。もし帯による差がなければ、confidenceの自己申告は当てにならないという判断になります。</div>
+  <table>
+    <thead><tr><th>信頼度帯</th><th>件数</th><th>実際の的中率</th></tr></thead>
+    <tbody id="calibrationBody"></tbody>
+  </table>
+</section>
+
+<section id="variantCompareSection" style="display:none">
+  <h2>方式別の精度比較(画像認識 vs 計量モード)</h2>
+  <table>
+    <thead><tr><th>model_variant</th><th>件数</th><th>平均金額誤差率</th><th>平均枚数誤差(MAE)</th></tr></thead>
+    <tbody id="variantCompareBody"></tbody>
+  </table>
+</section>
+
 <section>
   <h2>検証ログ(このセッション内)</h2>
   <div id="logList" style="color:var(--text-dim); font-size:13px;">まだ記録がありません。</div>
@@ -1734,6 +1751,66 @@ function renderAggregate(){
     警告Precision(誤検知の少なさ): ${precision}%
   `;
   document.getElementById('csvBtn').textContent = `📄 CSVダウンロード(全${trialScores.length}件)`;
+  renderCalibrationTable();
+  renderVariantCompareTable();
+}
+
+// ---- confidence申告値と実際の的中率の相関を検証 ----
+function renderCalibrationTable(){
+  const rows = [];
+  trialScores.forEach(inf => {
+    const gt = inf.capture?.test_case?.ground_truth?.detail || {};
+    const rec = inf.recognition_result?.detail || {};
+    Object.entries(rec).forEach(([color, r]) => {
+      if(typeof r.confidence !== 'number' || !gt[color]) return;
+      rows.push({ confidence: r.confidence, correct: r.count === gt[color].count });
+    });
+  });
+
+  if(rows.length === 0){
+    document.getElementById('calibrationSection').style.display = 'none';
+    return;
+  }
+
+  const bands = [
+    { label: '自動採用(≥0.90)', filter: r => r.confidence >= 0.90 },
+    { label: '要確認(0.70〜0.89)', filter: r => r.confidence >= 0.70 && r.confidence < 0.90 },
+    { label: '再撮影推奨(<0.70)', filter: r => r.confidence < 0.70 }
+  ];
+
+  const body = document.getElementById('calibrationBody');
+  body.innerHTML = bands.map(b => {
+    const subset = rows.filter(b.filter);
+    if(subset.length === 0) return `<tr><td>${b.label}</td><td class="num">0</td><td class="num">-</td></tr>`;
+    const rate = (subset.filter(r=>r.correct).length / subset.length * 100).toFixed(0);
+    return `<tr><td>${b.label}</td><td class="num">${subset.length}</td><td class="num">${rate}%</td></tr>`;
+  }).join('');
+  document.getElementById('calibrationSection').style.display = 'block';
+}
+
+// ---- model_variant(画像認識 vs 計量モード等)ごとの精度比較 ----
+function renderVariantCompareTable(){
+  const variants = {};
+  trialScores.forEach(inf => {
+    const v = inf.model_variant || '(不明)';
+    if(!variants[v]) variants[v] = [];
+    variants[v].push(computeMetrics(inf));
+  });
+
+  const entries = Object.entries(variants);
+  if(entries.length === 0){
+    document.getElementById('variantCompareSection').style.display = 'none';
+    return;
+  }
+
+  const body = document.getElementById('variantCompareBody');
+  body.innerHTML = entries.map(([variant, metrics]) => {
+    const avgMoney = (metrics.reduce((a,m)=>a+m.money_error_pct,0)/metrics.length).toFixed(2);
+    const validMae = metrics.filter(m=>m.mae !== null).map(m=>m.mae);
+    const avgMae = validMae.length ? (validMae.reduce((a,b)=>a+b,0)/validMae.length).toFixed(2) : '-';
+    return `<tr><td>${variant}</td><td class="num">${metrics.length}</td><td class="num">${avgMoney}%</td><td class="num">${avgMae}枚</td></tr>`;
+  }).join('');
+  document.getElementById('variantCompareSection').style.display = 'block';
 }
 
 function onCountEdit(idx, newVal, inputEl){
