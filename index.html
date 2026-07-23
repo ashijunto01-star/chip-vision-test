@@ -282,7 +282,13 @@
       <input type="checkbox" id="arAutoDetectToggle" style="width:auto;">
       🤖 高さの自動検出(スタックの中央付近を1回タップするだけで、その色が続く上端・下端を自動でスキャン)
     </label>
-    <div class="hint" style="margin-bottom:8px;" id="arTapInstruction">① 立てた基準チップの束(一番上のチップの上端外側の縁→一番下のチップの底面外側の縁)を2回タップしてください。</div>
+    <div class="hint" style="margin-bottom:8px;" id="arTapInstruction">① 立てた基準チップの束の側面「内側」(輪郭がぼやけた縁ではなく、面がはっきり見える部分)を2回タップしてください。</div>
+    <div class="hint" style="margin-bottom:8px; color:var(--gold);">💡コツ: 基準チップは縁のボケた輪郭を避け側面の内側をタップ。スタックの高さは一番上のチップの「上辺」→一番下のチップの「下辺」を、外枠に沿ってタップすると精度が上がります。</div>
+    <div id="arCalibDataList" style="font-size:12px; color:var(--text-dim); margin-bottom:8px;"></div>
+    <div style="display:flex; gap:8px; margin-bottom:8px;">
+      <button class="cap-btn secondary" style="margin:0; flex:1; padding:8px; font-size:12px;" onclick="addArCalibDataPoint()">➕ この較正を追加(枚数を変えて再測定可)</button>
+      <button class="cap-btn" style="margin:0; flex:1; padding:8px; font-size:12px; background:var(--felt);" onclick="proceedToArHeightStage()">② 高さ測定へ進む</button>
+    </div>
     <div style="display:flex; gap:8px; margin-bottom:8px;">
       <button class="cap-btn secondary" style="margin:0; flex:1; padding:8px;" onclick="cycleArZoom()">🔍 拡大(<span id="arZoomLabel">x1</span>)</button>
       <button class="cap-btn secondary" style="margin:0; flex:1; padding:8px;" onclick="redoArReference()">🔄 ①からやり直し</button>
@@ -1082,6 +1088,7 @@ let arTapStage = 'reference'; // 'reference' | 'height'
 let arRefPoints = [];
 let arHeightPoints = [];
 let arZoomLevel = 1;
+let arCalibDataPoints = [];
 
 function startArExperimentV2(){
   const thickness = parseFloat(document.getElementById('ar-thickness').value);
@@ -1098,6 +1105,8 @@ function onArV2Captured(result){
   arTapStage = 'reference';
   arRefPoints = [];
   arHeightPoints = [];
+  arCalibDataPoints = [];
+  window._arPendingCalib = null;
   arPxPerMm = null;
   arZoomLevel = 1;
 
@@ -1107,7 +1116,8 @@ function onArV2Captured(result){
   document.getElementById('arResultArea').style.display = 'block';
   document.getElementById('arCalcResult').textContent = '';
   document.getElementById('arTapOverlay').innerHTML = '';
-  document.getElementById('arTapInstruction').textContent = '① 立てた基準チップの束(一番上のチップの上端外側の縁→一番下のチップの底面外側の縁)を2回タップしてください。';
+  document.getElementById('arTapInstruction').textContent = '① 立てた基準チップの束の側面「内側」(輪郭がぼやけた縁ではなく、面がはっきり見える部分)を2回タップしてください。';
+  renderArCalibList();
 
   const select = document.getElementById('ar-color-select');
   select.innerHTML = chipColors.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
@@ -1200,12 +1210,66 @@ function redoArReference(){
   arTapStage = 'reference';
   arRefPoints = [];
   arHeightPoints = [];
+  arCalibDataPoints = [];
   arPxPerMm = null;
   window._arLastCalc = null;
+  window._arPendingCalib = null;
   document.getElementById('arCalcResult').textContent = '';
-  document.getElementById('arTapInstruction').textContent = '① 立てた基準チップの束(一番上のチップの上端外側の縁→一番下のチップの底面外側の縁)を2回タップしてください。';
+  document.getElementById('arTapInstruction').textContent = '① 立てた基準チップの束の側面「内側」(輪郭がぼやけた縁ではなく、面がはっきり見える部分)を2回タップしてください。';
+  renderArCalibList();
   redrawArOverlay();
 }
+
+// ---- 複数枚数での較正データを蓄積し、重み付き平均でpx/mmを算出 ----
+function addArCalibDataPoint(){
+  if(!window._arPendingCalib){
+    alert('先に基準チップの2点をタップして候補を作ってください。');
+    return;
+  }
+  arCalibDataPoints.push(window._arPendingCalib);
+  window._arPendingCalib = null;
+  arRefPoints = [];
+  redrawArOverlay();
+  renderArCalibList();
+  document.getElementById('arTapInstruction').textContent =
+    '較正を追加しました。枚数を変えて再度タップするか、「②高さ測定へ進む」を押してください。';
+}
+
+function renderArCalibList(){
+  const el = document.getElementById('arCalibDataList');
+  if(!el) return;
+  if(arCalibDataPoints.length === 0){ el.innerHTML = ''; return; }
+  const blended = computeBlendedArPxPerMm();
+  el.innerHTML =
+    arCalibDataPoints.map(p => `・${p.count}枚: ${p.pxDist.toFixed(1)}px → ${p.pxPerMm.toFixed(2)}px/mm`).join('<br>') +
+    `<br><b style="color:var(--felt-bright);">合成値(重み付き平均): ${blended.toFixed(2)}px/mm</b>`;
+}
+
+function computeBlendedArPxPerMm(){
+  // 区間が長い(枚数が多い)データほどタップ誤差の影響が小さいため、count^2で重み付け
+  const weightSum = arCalibDataPoints.reduce((a,p) => a + p.count*p.count, 0);
+  const weighted = arCalibDataPoints.reduce((a,p) => a + p.count*p.count*p.pxPerMm, 0);
+  return weighted / weightSum;
+}
+
+function proceedToArHeightStage(){
+  if(window._arPendingCalib){
+    arCalibDataPoints.push(window._arPendingCalib);
+    window._arPendingCalib = null;
+  }
+  if(arCalibDataPoints.length === 0){
+    alert('先に基準チップの較正を少なくとも1回完了してください。');
+    return;
+  }
+  arPxPerMm = computeBlendedArPxPerMm();
+  arTapStage = 'height';
+  arHeightPoints = [];
+  renderArCalibList();
+  document.getElementById('arTapInstruction').textContent =
+    `② 較正完了(${arPxPerMm.toFixed(2)}px/mm、${arCalibDataPoints.length}件のデータから合成)。スタックの一番上のチップの上端外側の縁→一番下のチップの底面外側の縁の順に2回タップしてください。`;
+  redrawArOverlay();
+}
+
 function redoArHeight(){
   if(!arPxPerMm){
     alert('先に①基準チップの較正を完了してください。');
@@ -1240,9 +1304,10 @@ function onArImageTap(e){
       const pxDist = Math.hypot(arRefPoints[1].videoX - arRefPoints[0].videoX, arRefPoints[1].videoY - arRefPoints[0].videoY);
       const thicknessMm = parseFloat(document.getElementById('ar-thickness').value);
       const calibCount = parseFloat(document.getElementById('ar-calib-count').value) || 1;
-      arPxPerMm = pxDist / (thicknessMm * calibCount);
-      arTapStage = 'height';
-      document.getElementById('arTapInstruction').textContent = `② 較正完了(${arPxPerMm.toFixed(2)}px/mm、基準${calibCount}枚分から算出)。次にスタックの一番上のチップの上端外側の縁→一番下のチップの底面外側の縁の順に2回タップしてください。`;
+      const pxPerMm = pxDist / (thicknessMm * calibCount);
+      window._arPendingCalib = { count: calibCount, pxDist, pxPerMm };
+      document.getElementById('arTapInstruction').textContent =
+        `候補: ${calibCount}枚 → ${pxDist.toFixed(1)}px → ${pxPerMm.toFixed(2)}px/mm。「➕この較正を追加」で採用するか、枚数を変えて再タップしてください。`;
     }
     return;
   }
