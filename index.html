@@ -987,6 +987,7 @@ let pendingMaxEdge = 1280;
 
 async function openCamera(onCaptured, maxEdge, guideText){
   try{
+    ensureTiltSensor(); // ユーザー操作(クリック)起点で呼ぶ必要があるため、ここで試みる
     const modal = document.getElementById('cameraModal');
     const video = document.getElementById('cameraVideo');
     document.getElementById('cameraGuide').textContent = guideText || '';
@@ -1023,6 +1024,24 @@ async function openCamera(onCaptured, maxEdge, guideText){
 
 // ---- 撮影中のリアルタイム品質チェック(暗さ・ブレ/距離の簡易ヒューリスティック) ----
 let liveAnalysisInterval = null;
+let latestTiltBeta = null;
+let tiltPermissionRequested = false;
+
+// ---- 端末の傾きセンサーを登録(iOSは許可プロンプトが必要) ----
+async function ensureTiltSensor(){
+  if(tiltPermissionRequested) return;
+  tiltPermissionRequested = true;
+  try{
+    if(typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
+      const perm = await DeviceOrientationEvent.requestPermission();
+      if(perm !== 'granted') return;
+    }
+    window.addEventListener('deviceorientation', (e) => {
+      latestTiltBeta = e.beta; // 前後方向の傾き(縦持ちで垂直=90°付近が水平構え)
+    });
+  }catch(e){ /* センサー非対応・拒否時は傾き警告なしにフォールバック */ }
+}
+
 function startLiveAnalysis(){
   const video = document.getElementById('cameraVideo');
   const statusEl = document.getElementById('cameraLiveStatus');
@@ -1060,6 +1079,10 @@ function startLiveAnalysis(){
       const issues = [];
       if(avgLum < 55) issues.push('暗すぎます');
       if(detailScore < 6) issues.push('ピント/距離を確認してください');
+      if(latestTiltBeta !== null){
+        const tiltDeviation = Math.abs(latestTiltBeta - 90);
+        if(tiltDeviation > 15) issues.push('📐カメラが傾いています(水平に構えてください)');
+      }
 
       const statusEl2 = document.getElementById('cameraLiveStatus');
       if(!statusEl2) return;
