@@ -290,6 +290,36 @@
 </section>
 
 <section>
+  <h2>📏 較正: 写真から厚みを算出(ノギス不要)</h2>
+  <div class="hint" style="margin-bottom:10px;">
+    枚数が分かっている基準スタック(例: 5枚・10枚・20枚)を1枚撮影し、矩形選択するだけで「1枚あたりの厚み」を逆算します。定規・ノギスでの実測が不要になります。チップ直径(上のグローバル設定)は先に登録しておいてください。
+  </div>
+  <div class="row2" style="margin-bottom:10px;">
+    <span style="width:90px; flex:none; font-size:13px;">既知の枚数</span>
+    <input type="text" inputmode="numeric" id="calib-known-count" placeholder="例: 10">
+  </div>
+  <div class="row2" style="margin-bottom:10px;">
+    <span style="width:90px; flex:none; font-size:13px;">反映先の色</span>
+    <select id="calib-target-color" style="flex:1;"></select>
+  </div>
+  <button class="cap-btn" style="background:var(--purple, #7f77dd);" onclick="startThicknessCalibCapture()">📷 基準スタックを撮影</button>
+  <div id="thicknessCalibResultArea" style="display:none; margin-top:14px;">
+    <div class="hint" style="margin-bottom:8px;" id="thicknessCalibInstruction">スタックの左上の角をタップしてください。</div>
+    <div id="thicknessCalibScrollBox" style="max-width:100%; max-height:420px; overflow:auto; border:1px solid var(--panel-line); border-radius:8px;">
+      <div style="position:relative; display:inline-block;">
+        <img id="thicknessCalibImage" style="display:block; border-radius:8px;">
+        <svg id="thicknessCalibOverlay" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></svg>
+      </div>
+    </div>
+    <div id="thicknessCalibResult" style="margin-top:10px; font-family:var(--mono); font-size:13px;"></div>
+    <div style="display:flex; gap:8px; margin-top:10px;">
+      <button class="run-btn" style="margin:0; flex:1;" onclick="applyThicknessCalibToGlobal()">全体の厚みに反映</button>
+      <button class="run-btn" style="margin:0; flex:1; background:var(--felt);" onclick="applyThicknessCalibToColor()">選択した色の高さ校正に反映</button>
+    </div>
+  </div>
+</section>
+
+<section>
   <h2>🧪 実験: 側面高さ計測(写真内スケール較正 v3)</h2>
   <div class="hint" style="margin-bottom:10px;">
     正式な精算には使わないでください(検証専用)。<b>基準チップ1枚をコインのように立てて、スタックのすぐ隣に同じ距離感で置いてください。</b>寝かせて直径で較正する方式(v2)は、カメラの角度によって高さ方向とは異なる歪みを受けるため、測りたい軸(高さ)と同じ軸(厚み)で較正するこの方式の方が正確です。
@@ -1656,6 +1686,117 @@ function adoptAutoModeResults(){
 
   renderResults(autoModeResults.map(r => ({...r})), []);
   renderWarnings([]);
+}
+
+// ---- 較正: 既知の枚数の基準スタックを撮影・矩形選択し、1枚あたりの厚みを逆算する ----
+let thicknessCalibCorner = null;
+let thicknessCalibComputed = null;
+
+function startThicknessCalibCapture(){
+  const diameter = parseFloat(document.getElementById('global-diameter').value);
+  const knownCount = parseFloat(document.getElementById('calib-known-count').value);
+  if(!diameter || diameter <= 0){
+    const errorBox = document.getElementById('errorBox');
+    errorBox.style.display = 'block';
+    errorBox.textContent = 'チップ直径(mm)を先に登録してください。';
+    return;
+  }
+  if(!knownCount || knownCount <= 0){
+    const errorBox = document.getElementById('errorBox');
+    errorBox.style.display = 'block';
+    errorBox.textContent = '基準スタックの既知の枚数を入力してください。';
+    return;
+  }
+  const select = document.getElementById('calib-target-color');
+  select.innerHTML = chipColors.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+
+  thicknessCalibCorner = null;
+  thicknessCalibComputed = null;
+  openCamera(onThicknessCalibCaptured, 1920, `枚数が分かっている基準スタック(${knownCount}枚)を横一列に並べて撮影してください`);
+}
+
+function onThicknessCalibCaptured(result){
+  const img = document.getElementById('thicknessCalibImage');
+  img.src = result.dataUrl;
+  document.getElementById('thicknessCalibResultArea').style.display = 'block';
+  document.getElementById('thicknessCalibOverlay').innerHTML = '';
+  document.getElementById('thicknessCalibResult').textContent = '';
+  document.getElementById('thicknessCalibInstruction').textContent = 'スタックの左上の角をタップしてください。';
+  thicknessCalibCorner = null;
+  thicknessCalibComputed = null;
+  img.onclick = onThicknessCalibTap;
+}
+
+function onThicknessCalibTap(e){
+  const img = document.getElementById('thicknessCalibImage');
+  const rect = img.getBoundingClientRect();
+  const scaleX = img.naturalWidth / rect.width;
+  const scaleY = img.naturalHeight / rect.height;
+  const videoX = (e.clientX - rect.left) * scaleX;
+  const videoY = (e.clientY - rect.top) * scaleY;
+
+  if(!thicknessCalibCorner){
+    thicknessCalibCorner = { x: videoX, y: videoY };
+    const overlay = document.getElementById('thicknessCalibOverlay');
+    const sx = img.clientWidth / img.naturalWidth, sy = img.clientHeight / img.naturalHeight;
+    overlay.innerHTML += `<circle cx="${videoX*sx}" cy="${videoY*sy}" r="6" fill="var(--gold)" stroke="#fff" stroke-width="2"/>`;
+    document.getElementById('thicknessCalibInstruction').textContent = 'スタックの右下の角をタップしてください。';
+    return;
+  }
+
+  const left = Math.min(thicknessCalibCorner.x, videoX);
+  const right = Math.max(thicknessCalibCorner.x, videoX);
+  const top = Math.min(thicknessCalibCorner.y, videoY);
+  const bottom = Math.max(thicknessCalibCorner.y, videoY);
+  thicknessCalibCorner = null;
+
+  if(right - left < 4 || bottom - top < 4){
+    alert('範囲が小さすぎます。もう一度、左上→右下の順にタップしてください。');
+    document.getElementById('thicknessCalibInstruction').textContent = 'スタックの左上の角をタップしてください。';
+    return;
+  }
+
+  const overlay = document.getElementById('thicknessCalibOverlay');
+  const sx = img.clientWidth / img.naturalWidth, sy = img.clientHeight / img.naturalHeight;
+  overlay.innerHTML += `<rect x="${left*sx}" y="${top*sy}" width="${(right-left)*sx}" height="${(bottom-top)*sy}" fill="none" stroke="var(--felt-bright)" stroke-width="2"/>`;
+
+  const diameterMm = parseFloat(document.getElementById('global-diameter').value);
+  const knownCount = parseFloat(document.getElementById('calib-known-count').value);
+  const widthPx = right - left;
+  const heightPx = bottom - top;
+  const pxPerMm = widthPx / diameterMm;
+  const heightMm = heightPx / pxPerMm;
+  const effectiveThickness = heightMm / knownCount;
+
+  thicknessCalibComputed = { heightMm, knownCount, effectiveThickness };
+  document.getElementById('thicknessCalibResult').innerHTML =
+    `幅${widthPx.toFixed(0)}px(直径${diameterMm}mm)→${pxPerMm.toFixed(2)}px/mm<br>` +
+    `高さ${heightPx.toFixed(0)}px → ${heightMm.toFixed(2)}mm<br>` +
+    `${heightMm.toFixed(2)}mm ÷ ${knownCount}枚 = <b>1枚あたり${effectiveThickness.toFixed(4)}mm</b>`;
+  document.getElementById('thicknessCalibInstruction').textContent = '計測完了。下のボタンで反映するか、再度タップしてやり直せます。';
+}
+
+function applyThicknessCalibToGlobal(){
+  if(!thicknessCalibComputed){ alert('先に矩形選択を完了してください。'); return; }
+  document.getElementById('global-thickness').value = thicknessCalibComputed.effectiveThickness.toFixed(4);
+  alert(`チップ厚み(mm)欄に ${thicknessCalibComputed.effectiveThickness.toFixed(4)}mm を反映しました。`);
+}
+
+function applyThicknessCalibToColor(){
+  if(!thicknessCalibComputed){ alert('先に矩形選択を完了してください。'); return; }
+  const colorName = document.getElementById('calib-target-color').value;
+  const chip = chipColors.find(c => c.name === colorName);
+  if(!chip){ alert('反映先の色が見つかりません。'); return; }
+
+  const count = thicknessCalibComputed.knownCount;
+  if(count === 5){ chip.height5mm = thicknessCalibComputed.heightMm; }
+  else if(count === 10){ chip.height10mm = thicknessCalibComputed.heightMm; }
+  else{
+    alert(`既知の枚数が5枚・10枚以外(${count}枚)のため、色別の高さ校正欄には反映できません。「全体の厚みに反映」をお使いください。`);
+    return;
+  }
+  renderChipRows();
+  alert(`「${colorName}」の${count}枚高さ校正欄に ${thicknessCalibComputed.heightMm.toFixed(2)}mm を反映しました。`);
 }
 
 // ---- 色ごとの実測校正(5枚/10枚の高さ)から、有効な1枚厚みを算出 ----
