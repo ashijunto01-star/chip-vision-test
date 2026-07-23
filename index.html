@@ -339,7 +339,12 @@
   </div>
   <button class="cap-btn" style="background:var(--purple, #7f77dd);" onclick="startMarkerCapture()">📷 マーカー+スタックを撮影</button>
   <div id="markerResultArea" style="display:none; margin-top:14px;">
+    <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:13px; color:var(--text-dim);">
+      <input type="checkbox" id="markerAutoDetectToggle" style="width:auto;" checked>
+      🤖 色から4隅を自動検出(パスポート中央付近を1回タップするだけで、その色の輪郭から4隅を推定)
+    </label>
     <div class="hint" style="margin-bottom:8px;" id="markerInstruction">マーカーの左上の角をタップしてください。</div>
+    <button class="cap-btn secondary" style="margin-bottom:8px; padding:8px;" onclick="redoMarkerCorners()">🔄 ①(マーカー4隅)からやり直し</button>
     <button class="cap-btn secondary" style="margin-bottom:8px; padding:8px;" onclick="cycleMarkerZoom()">🔍 拡大(<span id="markerZoomLabel">x1</span>)</button>
     <div id="markerScrollBox" style="max-width:100%; max-height:420px; overflow:auto; border:1px solid var(--panel-line); border-radius:8px;">
       <div style="position:relative; display:inline-block;">
@@ -2105,6 +2110,38 @@ function onMarkerCaptured(result){
 
 const MARKER_CORNER_LABELS = ['左上', '右上', '右下', '左下'];
 
+// ---- タップした色を基準に、その色の輪郭から4隅を推定する(回転矩形の簡易コーナー検出) ----
+function autoDetectPassportCorners(ctx, seedX, seedY, canvasW, canvasH){
+  const seedData = ctx.getImageData(Math.round(seedX), Math.round(seedY), 1, 1).data;
+  const targetR = seedData[0], targetG = seedData[1], targetB = seedData[2];
+  const threshold = 45;
+  const step = 2; // 高速化のための間引きサンプリング
+
+  const imgData = ctx.getImageData(0, 0, canvasW, canvasH).data;
+  let minSum = Infinity, maxSum = -Infinity, minDiff = Infinity, maxDiff = -Infinity;
+  let pMinSum = null, pMaxSum = null, pMinDiff = null, pMaxDiff = null;
+  let matchCount = 0;
+
+  for(let y = 0; y < canvasH; y += step){
+    for(let x = 0; x < canvasW; x += step){
+      const idx = (y * canvasW + x) * 4;
+      const dr = imgData[idx] - targetR, dg = imgData[idx+1] - targetG, db = imgData[idx+2] - targetB;
+      if(Math.sqrt(dr*dr + dg*dg + db*db) < threshold){
+        matchCount++;
+        const sum = x + y, diff = x - y;
+        if(sum < minSum){ minSum = sum; pMinSum = { x, y }; }
+        if(sum > maxSum){ maxSum = sum; pMaxSum = { x, y }; }
+        if(diff < minDiff){ minDiff = diff; pMinDiff = { x, y }; }
+        if(diff > maxDiff){ maxDiff = diff; pMaxDiff = { x, y }; }
+      }
+    }
+  }
+
+  if(matchCount < 200 || !pMinSum || !pMaxSum || !pMinDiff || !pMaxDiff) return null;
+  // 順序: 左上(x+y最小)→右上(x-y最大)→右下(x+y最大)→左下(x-y最小)
+  return [pMinSum, pMaxDiff, pMaxSum, pMinDiff];
+}
+
 function onMarkerTap(e){
   const img = document.getElementById('markerImage');
   const rect = img.getBoundingClientRect();
@@ -2118,6 +2155,26 @@ function onMarkerTap(e){
   window._markerLastViewportPoint = { x: e.clientX - boxRect.left, y: e.clientY - boxRect.top };
 
   if(markerStage === 'corners'){
+    const autoDetect = document.getElementById('markerAutoDetectToggle')?.checked;
+    if(autoDetect && markerCorners.length === 0){
+      const detected = autoDetectPassportCorners(markerCtx, rawX, rawY, img.naturalWidth, img.naturalHeight);
+      if(detected){
+        markerCorners = detected;
+        redrawMarkerOverlay();
+
+        const w = parseFloat(document.getElementById('marker-width').value);
+        const h = parseFloat(document.getElementById('marker-height').value);
+        const dstPoints = [{x:0,y:0}, {x:w,y:0}, {x:w,y:h}, {x:0,y:h}];
+        markerH = computeHomography(markerCorners, dstPoints);
+
+        markerStage = 'height';
+        document.getElementById('markerInstruction').textContent = '4隅を自動検出しました(結果がおかしい場合は「①からやり直し」でチェックを外し手動タップに切替可)。スタックの一番上のチップの上端外側の縁→一番下のチップの底面外側の縁をタップしてください。';
+        return;
+      }
+      document.getElementById('markerInstruction').textContent = '自動検出に失敗しました。もう一度タップするか、チェックを外して手動で4隅をタップしてください。';
+      return;
+    }
+
     markerCorners.push(snapped);
     redrawMarkerOverlay();
 
@@ -2165,6 +2222,17 @@ function onMarkerTap(e){
       `${heightMm.toFixed(2)}mm ÷ ${thicknessMm.toFixed(4)}mm = <b>${rawCount.toFixed(2)}枚</b> → 採用値: ${roundedCount}枚`;
     document.getElementById('markerInstruction').textContent = '計測完了。「この結果を採用」で反映するか、別のスタックを続けて測れます(タップし直すとリセットされます)。';
   }
+}
+
+function redoMarkerCorners(){
+  markerStage = 'corners';
+  markerCorners = [];
+  markerHeightPoints = [];
+  markerH = null;
+  window._markerLastCalc = null;
+  document.getElementById('markerResult').textContent = '';
+  document.getElementById('markerInstruction').textContent = 'マーカーの左上の角をタップしてください(自動検出中の場合は中央付近を1回タップ)。';
+  redrawMarkerOverlay();
 }
 
 function redrawMarkerOverlay(){
