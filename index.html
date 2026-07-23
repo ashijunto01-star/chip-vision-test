@@ -271,6 +271,10 @@
     <span style="width:90px; flex:none; font-size:13px;">チップ厚み(mm)</span>
     <input type="text" inputmode="decimal" id="global-thickness" placeholder="例: 3.3">
   </div>
+  <div class="row2" style="margin-bottom:10px;">
+    <span style="width:90px; flex:none; font-size:13px;">縁の斑点間隔(mm)</span>
+    <input type="text" inputmode="decimal" id="global-spot-spacing" placeholder="例: 3.0(任意・白斑点がある場合)">
+  </div>
   <button class="cap-btn" style="background:var(--purple, #7f77dd);" onclick="startAutoModeCapture()">📷 チップの列を撮影</button>
   <div id="autoModeResultArea" style="display:none; margin-top:14px;">
     <div class="hint" style="margin-bottom:8px;" id="autoModeInstruction">スタックの左上の角をタップしてください。</div>
@@ -1440,6 +1444,50 @@ function onAutoModeCaptured(result){
 }
 
 // ---- 矩形範囲内の平均色から、最も近い登録色を判定する ----
+// ---- rgb文字列が白系(無彩色・高輝度)かどうかを判定 ----
+function isNearWhite(rgbStr){
+  const m = rgbStr.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+  if(!m) return false;
+  const r = parseInt(m[1]), g = parseInt(m[2]), b = parseInt(m[3]);
+  const avg = (r+g+b)/3;
+  const spread = Math.max(r,g,b) - Math.min(r,g,b);
+  return avg > 190 && spread < 30;
+}
+
+// ---- 縁の白斑点を検出し、既知の間隔から独立したpx/mmを算出するクロスチェック ----
+function detectWhiteSpotsInBox(ctx, left, top, right, bottom){
+  const centerX = Math.round((left + right) / 2);
+  const stripHalf = Math.max(1, Math.round((right-left) * 0.08));
+  const xs = Math.max(0, centerX - stripHalf);
+  const xw = Math.min(ctx.canvas.width - xs, stripHalf * 2);
+
+  const isBrightRow = (y) => {
+    const data = ctx.getImageData(xs, y, xw, 1).data;
+    let r=0,g=0,b=0,n=0;
+    for(let i=0;i<data.length;i+=4){ r+=data[i]; g+=data[i+1]; b+=data[i+2]; n++; }
+    r/=n; g/=n; b/=n;
+    const avg = (r+g+b)/3;
+    const spread = Math.max(r,g,b) - Math.min(r,g,b);
+    return avg > 195 && spread < 35;
+  };
+
+  const centers = [];
+  let inBlob = false, blobStart = 0;
+  for(let y = Math.round(top); y <= Math.round(bottom); y++){
+    const bright = isBrightRow(y);
+    if(bright && !inBlob){ inBlob = true; blobStart = y; }
+    if(!bright && inBlob){ inBlob = false; centers.push((blobStart + y - 1) / 2); }
+  }
+  if(inBlob) centers.push((blobStart + Math.round(bottom)) / 2);
+
+  if(centers.length < 2) return { count: centers.length, avgGapPx: null };
+
+  const gaps = [];
+  for(let i = 1; i < centers.length; i++) gaps.push(centers[i] - centers[i-1]);
+  const avgGapPx = gaps.reduce((a,b)=>a+b,0) / gaps.length;
+  return { count: centers.length, avgGapPx };
+}
+
 function findNearestRegisteredColorInBox(ctx, left, top, right, bottom){
   // 縁のハロー(背景の混ざり)を避けるため、内側60%の中央領域だけを平均する
   const w = right - left, h = bottom - top;
@@ -1512,10 +1560,37 @@ function onAutoModeTap(e){
   const rawCount = heightMm / thicknessMm;
   const roundedCount = Math.round(rawCount);
 
+  // ---- 縁の白斑点を使ったクロスチェック(地色が白系のチップではスキップ) ----
+  let basisText = `幅${widthPx.toFixed(0)}px(直径${diameterMm}mm)→${pxPerMm.toFixed(2)}px/mm、高さ${heightPx.toFixed(0)}px→${heightMm.toFixed(2)}mm÷${thicknessMm.toFixed(3)}mm(${source})=${rawCount.toFixed(2)}枚`;
+  let finalCount = roundedCount;
+  const spotSpacingMm = parseFloat(document.getElementById('global-spot-spacing').value);
+  const chipDef = chipColors.find(c => c.name === matched.color);
+  const isWhiteish = chipDef?.detectedColor && isNearWhite(chipDef.detectedColor);
+
+  if(spotSpacingMm && !isWhiteish){
+    const spots = detectWhiteSpotsInBox(ctx, Math.round(left), Math.round(top), Math.round(right), Math.round(bottom));
+    if(spots && spots.count >= 2){
+      const spotPxPerMm = spots.avgGapPx / spotSpacingMm;
+      const spotHeightMm = heightPx / spotPxPerMm;
+      const spotRawCount = spotHeightMm / thicknessMm;
+      const spotRoundedCount = Math.round(spotRawCount);
+      const diff = Math.abs(spotRawCount - rawCount);
+
+      basisText += ` / 斑点較正: ${spots.count}個検出・平均間隔${spots.avgGapPx.toFixed(1)}px→${spotPxPerMm.toFixed(2)}px/mm→${spotRawCount.toFixed(2)}枚`;
+      if(diff > 1){
+        basisText += `(⚠幅ベースとの差が${diff.toFixed(1)}枚あります。要確認)`;
+      } else {
+        basisText += `(幅ベースと一致・信頼度高)`;
+      }
+    } else {
+      basisText += ' / 斑点検出: 検出できず(幅ベースの値を採用)';
+    }
+  }
+
   autoModeResults.push({
     color: matched.color,
-    count: roundedCount,
-    count_basis: `幅${widthPx.toFixed(0)}px(直径${diameterMm}mm)→${pxPerMm.toFixed(2)}px/mm、高さ${heightPx.toFixed(0)}px→${heightMm.toFixed(2)}mm÷${thicknessMm.toFixed(3)}mm(${source})=${rawCount.toFixed(2)}枚`,
+    count: finalCount,
+    count_basis: basisText,
     note: '完全自動計測(範囲選択方式)'
   });
 
