@@ -252,6 +252,15 @@
 </section>
 
 <section>
+  <h2>🔍 仕分け検証(容器に入れる前の色確認・最優先で使ってください)</h2>
+  <div class="hint" style="margin-bottom:10px;">
+    <b>計測精度より、色の仕分け間違いの方が実運用では危険です。</b>チップを容器に入れる前に、1枚だけカメラにかざして色を確認してください。
+  </div>
+  <button class="cap-btn" style="background:var(--felt);" onclick="startSortCheckCapture()">📷 仕分けるチップを1枚確認</button>
+  <div id="sortCheckResult" style="margin-top:10px; font-family:var(--mono); font-size:14px; text-align:center;"></div>
+</section>
+
+<section>
   <h2><span class="step-num">2b</span>⚖️ 計量モード(Phase 0・画像認識の代わりに重量から算出)</h2>
   <div class="hint" style="margin-bottom:10px;">各色の1枚あたり重量(上の色設定欄)を登録した上で、実際に量った総重量(g)を入力してください。校正は1枚単体ではなく10〜20枚まとめて量って割り算すると精度が上がります。</div>
   <div id="weightModeInputs"></div>
@@ -1572,6 +1581,60 @@ function autoDetectHeightFromSeed(img, seedX, seedY, detectedColorStr){
 }
 
 // ---- 完全自動計測モード(較正不要): スタック自体の幅を基準チップ代わりに使う ----
+// ---- 仕分け検証: 容器に入れる前にチップ1枚の色を確認する ----
+function startSortCheckCapture(){
+  if(chipColors.filter(c => c.detectedColor).length === 0){
+    const errorBox = document.getElementById('errorBox');
+    errorBox.style.display = 'block';
+    errorBox.textContent = 'まず色設定欄で各色の参照写真を登録してください(検出色が必要です)。';
+    return;
+  }
+  openCamera(onSortCheckCaptured, 800, '確認したいチップを1枚、画面中央に大きく写してください');
+}
+
+function onSortCheckCaptured(result){
+  const canvas = document.createElement('canvas');
+  const img = new Image();
+  img.onload = () => {
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+
+    // 画面中央付近(内側40%)の平均色をサンプリングして最も近い登録色を判定
+    const cx = canvas.width / 2, cy = canvas.height / 2;
+    const sw = Math.round(canvas.width * 0.3), sh = Math.round(canvas.height * 0.3);
+    const data = ctx.getImageData(cx - sw/2, cy - sh/2, sw, sh).data;
+    let r=0,g=0,b=0,n=0;
+    for(let i=0;i<data.length;i+=4){ r+=data[i]; g+=data[i+1]; b+=data[i+2]; n++; }
+    r/=n; g/=n; b/=n;
+
+    let best = null, bestDist = Infinity, secondBest = null, secondDist = Infinity;
+    chipColors.forEach(c => {
+      if(!c.detectedColor) return;
+      const m = c.detectedColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+      if(!m) return;
+      const dist = Math.sqrt((r-parseInt(m[1]))**2 + (g-parseInt(m[2]))**2 + (b-parseInt(m[3]))**2);
+      if(dist < bestDist){ secondDist = bestDist; secondBest = best; bestDist = dist; best = c.name; }
+      else if(dist < secondDist){ secondDist = dist; secondBest = c.name; }
+    });
+
+    const resultEl = document.getElementById('sortCheckResult');
+    if(!best){
+      resultEl.innerHTML = `<span style="color:var(--danger);">判定できませんでした。もう一度撮影してください。</span>`;
+      return;
+    }
+
+    const confident = secondBest === null || (secondDist - bestDist) > 20;
+    if(confident){
+      resultEl.innerHTML = `<span style="color:var(--felt-bright); font-size:18px;">✓ 「${best}」で間違いありません</span>`;
+    } else {
+      resultEl.innerHTML = `<span style="color:var(--gold); font-size:18px;">⚠ 「${best}」だと思いますが、「${secondBest}」との判別が微妙です。目視でも確認してください</span>`;
+    }
+  };
+  img.src = result.dataUrl;
+}
+
 function startAutoModeCapture(){
   const diameter = parseFloat(document.getElementById('global-diameter').value);
   const thickness = parseFloat(document.getElementById('global-thickness').value);
