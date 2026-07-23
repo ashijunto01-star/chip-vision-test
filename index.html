@@ -269,14 +269,22 @@
   <button class="cap-btn" style="background:var(--purple, #7f77dd);" onclick="startArExperimentV2()">📷 基準チップ+スタックを一緒に撮影</button>
   <div id="arResultArea" style="display:none; margin-top:14px;">
     <div class="hint" style="margin-bottom:8px;" id="arTapInstruction">① 寝かせた基準チップの直径の両端(左端→右端)を2回タップしてください。</div>
-    <div style="position:relative; display:inline-block; max-width:100%;">
-      <img id="arCapturedImage" style="max-width:100%; border-radius:8px; border:1px solid var(--panel-line);">
-      <svg id="arTapOverlay" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></svg>
+    <div style="display:flex; gap:8px; margin-bottom:8px;">
+      <button class="cap-btn secondary" style="margin:0; flex:1; padding:8px;" onclick="cycleArZoom()">🔍 拡大(<span id="arZoomLabel">x1</span>)</button>
+      <button class="cap-btn secondary" style="margin:0; flex:1; padding:8px;" onclick="redoArReference()">🔄 ①からやり直し</button>
+      <button class="cap-btn secondary" style="margin:0; flex:1; padding:8px;" onclick="redoArHeight()">🔄 ②からやり直し</button>
     </div>
+    <div id="arImageScrollBox" style="max-width:100%; max-height:420px; overflow:auto; border:1px solid var(--panel-line); border-radius:8px;">
+      <div style="position:relative; display:inline-block;" id="arImageWrapper">
+        <img id="arCapturedImage" style="display:block; border-radius:8px;">
+        <svg id="arTapOverlay" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></svg>
+      </div>
+    </div>
+    <div class="hint" style="margin-top:6px;">拡大時は画像を上下左右にスクロールしながらタップできます。</div>
     <div id="arCalcResult" style="margin-top:10px; font-family:var(--mono); font-size:13px;"></div>
     <div class="row2" style="margin-top:10px;">
       <span style="width:90px; flex:none; font-size:13px;">対象の色</span>
-      <select id="ar-color-select" style="flex:1;"></select>
+      <select id="ar-color-select" style="flex:1;" onchange="recomputeArResult()"></select>
     </div>
     <button class="run-btn" style="margin-top:10px;" onclick="adoptArResult()">この結果を採用</button>
   </div>
@@ -671,6 +679,16 @@ function renderChipRows(){
                  onblur="updateChipTolerance(${i}, this.value, this)">
           <span class="yen-prefix" style="font-size:11px;">枚</span>
         </div>
+        <div class="row2" style="font-size:11px;">
+          <span class="yen-prefix" style="font-size:10px; width:56px; flex:none;">🧪5枚高さ</span>
+          <input type="text" inputmode="decimal" value="${c.height5mm || ''}" placeholder="任意・mm"
+                 onfocus="selectAllOnFocus(event)"
+                 onblur="updateChipHeightCalib(${i}, 'height5mm', this.value, this)">
+          <span class="yen-prefix" style="font-size:10px; width:56px; flex:none;">🧪10枚高さ</span>
+          <input type="text" inputmode="decimal" value="${c.height10mm || ''}" placeholder="任意・mm"
+                 onfocus="selectAllOnFocus(event)"
+                 onblur="updateChipHeightCalib(${i}, 'height10mm', this.value, this)">
+        </div>
         ${c.pendingDenom !== undefined ? `
           <div style="background:var(--panel); border:1px solid var(--gold); border-radius:8px; padding:8px 10px; margin-top:6px; font-size:12px;">
             画像内に「${c.pendingVisibleText}」という印字を検出しました。額面を¥${formatNum(c.pendingDenom)}に設定しますか?
@@ -718,8 +736,13 @@ function updateChipTolerance(i, val, inputEl){
   chipColors[i].tolerance = isNaN(n) ? null : n;
   inputEl.value = chipColors[i].tolerance !== null ? String(chipColors[i].tolerance) : '';
 }
+function updateChipHeightCalib(i, field, val, inputEl){
+  const n = parseFloat(String(val).replace(/[^0-9.]/g, ''));
+  chipColors[i][field] = isNaN(n) ? null : n;
+  inputEl.value = chipColors[i][field] !== null ? String(chipColors[i][field]) : '';
+}
 function removeChip(i){ chipColors.splice(i,1); renderChipRows(); }
-function addChipRow(){ chipColors.push({name:'', denom:0, unitWeight:null, tolerance:null, refBase64:null, refMime:null, refThumb:null, denomAutoDetected:false, denomDetecting:false}); renderChipRows(); }
+function addChipRow(){ chipColors.push({name:'', denom:0, unitWeight:null, tolerance:null, height5mm:null, height10mm:null, refBase64:null, refMime:null, refThumb:null, denomAutoDetected:false, denomDetecting:false}); renderChipRows(); }
 
 async function onRefFileSelected(i, e){
   const file = e.target.files[0];
@@ -1047,6 +1070,7 @@ let arPxPerMm = null;
 let arTapStage = 'reference'; // 'reference' | 'height'
 let arRefPoints = [];
 let arHeightPoints = [];
+let arZoomLevel = 1;
 
 function startArExperimentV2(){
   const diameter = parseFloat(document.getElementById('ar-diameter').value);
@@ -1065,8 +1089,10 @@ function onArV2Captured(result){
   arRefPoints = [];
   arHeightPoints = [];
   arPxPerMm = null;
+  arZoomLevel = 1;
 
   const img = document.getElementById('arCapturedImage');
+  img.onload = () => applyArZoom();
   img.src = result.dataUrl;
   document.getElementById('arResultArea').style.display = 'block';
   document.getElementById('arCalcResult').textContent = '';
@@ -1077,6 +1103,45 @@ function onArV2Captured(result){
   select.innerHTML = chipColors.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
 
   img.onclick = onArImageTap;
+}
+
+// ---- 拡大表示 ----
+function cycleArZoom(){
+  arZoomLevel = arZoomLevel >= 3 ? 1 : arZoomLevel + 1;
+  applyArZoom();
+}
+function applyArZoom(){
+  const scrollBox = document.getElementById('arImageScrollBox');
+  const img = document.getElementById('arCapturedImage');
+  if(!img.naturalWidth) return;
+  const baseWidth = scrollBox.clientWidth;
+  img.style.width = (baseWidth * arZoomLevel) + 'px';
+  document.getElementById('arZoomLabel').textContent = `x${arZoomLevel}`;
+  redrawArOverlay();
+}
+
+// ---- タップのやり直し ----
+function redoArReference(){
+  arTapStage = 'reference';
+  arRefPoints = [];
+  arHeightPoints = [];
+  arPxPerMm = null;
+  window._arLastCalc = null;
+  document.getElementById('arCalcResult').textContent = '';
+  document.getElementById('arTapInstruction').textContent = '① 寝かせた基準チップの直径の両端(左端→右端)を2回タップしてください。';
+  redrawArOverlay();
+}
+function redoArHeight(){
+  if(!arPxPerMm){
+    alert('先に①基準チップの較正を完了してください。');
+    return;
+  }
+  arTapStage = 'height';
+  arHeightPoints = [];
+  window._arLastCalc = null;
+  document.getElementById('arCalcResult').textContent = '';
+  document.getElementById('arTapInstruction').textContent = `② 較正済み(${arPxPerMm.toFixed(2)}px/mm)。スタックの上端→下端の順に2回タップしてください。`;
+  redrawArOverlay();
 }
 
 function onArImageTap(e){
@@ -1109,34 +1174,69 @@ function onArImageTap(e){
     redrawArOverlay();
 
     if(arHeightPoints.length === 2){
-      const pxHeight = Math.abs(arHeightPoints[1].videoY - arHeightPoints[0].videoY);
-      const heightMm = pxHeight / arPxPerMm;
-      const thicknessMm = parseFloat(document.getElementById('ar-thickness').value);
-      const rawCount = heightMm / thicknessMm;
-      const roundedCount = Math.round(rawCount);
-
-      window._arLastCalc = { pxHeight, heightMm, thicknessMm, rawCount, roundedCount };
-      document.getElementById('arCalcResult').innerHTML =
-        `較正(基準チップから直接算出): ${arPxPerMm.toFixed(2)}px/mm<br>` +
-        `タップ間の高さ: ${pxHeight.toFixed(1)}px → ${heightMm.toFixed(2)}mm<br>` +
-        `${heightMm.toFixed(2)}mm ÷ ${thicknessMm}mm = <b>${rawCount.toFixed(2)}枚</b> → 採用値: ${roundedCount}枚`;
+      recomputeArResult();
     }
   }
 }
 
+// ---- 色ごとの実測校正(5枚/10枚の高さ)から、有効な1枚厚みを算出 ----
+function getEffectiveThicknessForColor(colorName){
+  const c = chipColors.find(x => x.name === colorName);
+  const manualThickness = parseFloat(document.getElementById('ar-thickness').value);
+  if(!c) return { thickness: manualThickness, source: '手入力の厚み' };
+
+  const pts = [];
+  if(c.height5mm) pts.push([5, c.height5mm]);
+  if(c.height10mm) pts.push([10, c.height10mm]);
+
+  if(pts.length === 0) return { thickness: manualThickness, source: '手入力の厚み' };
+
+  // 原点を通る最小二乗近似(複数の実測点がある場合はそれらを重み付けして厚みを推定)
+  const num = pts.reduce((a,[n,h]) => a + n*h, 0);
+  const den = pts.reduce((a,[n]) => a + n*n, 0);
+  const thickness = num / den;
+  return { thickness, source: `実測校正(${pts.map(([n])=>n+'枚').join('・')}のデータから算出)` };
+}
+
+function recomputeArResult(){
+  if(arHeightPoints.length !== 2) return;
+  const pxHeight = Math.abs(arHeightPoints[1].videoY - arHeightPoints[0].videoY);
+  const heightMm = pxHeight / arPxPerMm;
+
+  const color = document.getElementById('ar-color-select').value;
+  const { thickness: thicknessMm, source } = getEffectiveThicknessForColor(color);
+  const rawCount = heightMm / thicknessMm;
+  const roundedCount = Math.round(rawCount);
+
+  window._arLastCalc = { pxHeight, heightMm, thicknessMm, rawCount, roundedCount };
+  document.getElementById('arCalcResult').innerHTML =
+    `較正(基準チップから直接算出): ${arPxPerMm.toFixed(2)}px/mm<br>` +
+    `タップ間の高さ: ${pxHeight.toFixed(1)}px → ${heightMm.toFixed(2)}mm<br>` +
+    `使用する1枚厚み: ${thicknessMm.toFixed(4)}mm(${source})<br>` +
+    `${heightMm.toFixed(2)}mm ÷ ${thicknessMm.toFixed(4)}mm = <b>${rawCount.toFixed(2)}枚</b> → 採用値: ${roundedCount}枚`;
+}
+
 function redrawArOverlay(){
   const overlay = document.getElementById('arTapOverlay');
+  const img = document.getElementById('arCapturedImage');
+  if(!img.naturalWidth){ overlay.innerHTML = ''; return; }
+  const scaleX = img.clientWidth / img.naturalWidth;
+  const scaleY = img.clientHeight / img.naturalHeight;
+  const toCss = p => ({ cssX: p.videoX * scaleX, cssY: p.videoY * scaleY });
+
   let svg = '';
   if(arRefPoints.length > 0){
-    svg += arRefPoints.map(p => `<circle cx="${p.cssX}" cy="${p.cssY}" r="6" fill="var(--felt-bright)" stroke="#fff" stroke-width="2"/>`).join('');
-    if(arRefPoints.length === 2){
-      svg += `<line x1="${arRefPoints[0].cssX}" y1="${arRefPoints[0].cssY}" x2="${arRefPoints[1].cssX}" y2="${arRefPoints[1].cssY}" stroke="var(--felt-bright)" stroke-width="2" stroke-dasharray="4"/>`;
+    const pts = arRefPoints.map(toCss);
+    svg += pts.map(p => `<circle cx="${p.cssX}" cy="${p.cssY}" r="6" fill="var(--felt-bright)" stroke="#fff" stroke-width="2"/>`).join('');
+    if(pts.length === 2){
+      svg += `<line x1="${pts[0].cssX}" y1="${pts[0].cssY}" x2="${pts[1].cssX}" y2="${pts[1].cssY}" stroke="var(--felt-bright)" stroke-width="2" stroke-dasharray="4"/>`;
     }
   }
   if(arHeightPoints.length > 0){
-    svg += arHeightPoints.map(p => `<circle cx="${p.cssX}" cy="${p.cssY}" r="6" fill="var(--gold)" stroke="#fff" stroke-width="2"/>`).join('');
-    if(arHeightPoints.length === 2){
-      svg += `<line x1="${arHeightPoints[0].cssX}" y1="${arHeightPoints[0].cssY}" x2="${arHeightPoints[1].cssX}" y2="${arHeightPoints[1].cssY}" stroke="var(--gold)" stroke-width="2" stroke-dasharray="4"/>`;
+    const pts = arHeightPoints.map(toCss);
+    svg += pts.map(p => `<circle cx="${p.cssX}" cy="${p.cssY}" r="6" fill="var(--gold)" stroke="#fff" stroke-width="2"/>`).join('');
+    if(pts.length === 2){
+      svg += `<line x1="${pts[0].cssX}" y1="${pts[0].cssY}" x2="${pts[1].cssX}" y2="${pts[1].cssY}" stroke="var(--gold)" stroke-width="2" stroke-dasharray="4"/>`;
     }
   }
   overlay.innerHTML = svg;
