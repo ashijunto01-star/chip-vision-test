@@ -1647,11 +1647,13 @@ function onAutoModeTap(e){
   const rawY = (e.clientY - rect.top) * scaleY;
   const snapped = autoModeCtx ? refineCornerToEdge(autoModeCtx, rawX, rawY, img.naturalWidth, img.naturalHeight) : { x: rawX, y: rawY };
   const videoX = snapped.x, videoY = snapped.y;
+  const snapDist = Math.hypot(videoX - rawX, videoY - rawY);
+  const snapDiag = `<span style="color:${snapDist > 1 ? 'var(--felt-bright)' : 'var(--text-dim)'};">[スナップ: ${snapDist > 1 ? `有効(${snapDist.toFixed(1)}px移動)` : '未検出(生タップのまま)'}]</span>`;
 
   if(!autoModeCorner){
     autoModeCorner = { x: videoX, y: videoY };
     drawAutoModeCornerMarker(videoX, videoY, img);
-    document.getElementById('autoModeInstruction').textContent = 'スタックの右下の角をタップしてください。';
+    document.getElementById('autoModeInstruction').innerHTML = `スタックの右下の角をタップしてください。 ${snapDiag}`;
     return;
   }
 
@@ -1725,7 +1727,7 @@ function onAutoModeTap(e){
 
   drawAutoModeOverlay({ leftX: left, topY: top, rightX: right, bottomY: bottom }, img);
   renderAutoModeList();
-  document.getElementById('autoModeInstruction').textContent = '次のスタックの左上の角をタップしてください(終わったら「この結果を採用」)。';
+  document.getElementById('autoModeInstruction').innerHTML = `次のスタックの左上の角をタップしてください(終わったら「この結果を採用」)。 ${snapDiag}`;
 }
 
 function drawAutoModeCornerMarker(videoX, videoY, img){
