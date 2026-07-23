@@ -295,6 +295,11 @@
 <section>
   <h2><span class="step-num">2b</span>⚖️ 計量モード(Phase 0・画像認識の代わりに重量から算出)</h2>
   <div class="hint" style="margin-bottom:10px;">各色の1枚あたり重量(上の色設定欄)を登録した上で、実際に量った総重量(g)を入力してください。校正は1枚単体ではなく10〜20枚まとめて量って割り算すると精度が上がります。</div>
+  <div class="hint" style="margin-bottom:10px; color:var(--gold);">
+    🧪 実験: Bluetooth標準規格(Weight Scale Service)対応のスケールがあれば、下のボタンで自動連携を試せます(非対応の場合は今まで通り手入力してください)。
+  </div>
+  <button class="cap-btn secondary" style="margin-bottom:10px;" onclick="connectBleScale()">🔌 Bluetoothスケールに接続(実験)</button>
+  <div class="status" id="bleScaleStatus" style="margin-bottom:10px;"></div>
   <div id="weightModeInputs"></div>
   <button class="run-btn" style="background:var(--felt); color:#fff;" onclick="runWeightMode()">⚖️ 重量から枚数を計算</button>
 </section>
@@ -2667,8 +2672,65 @@ function renderWeightModeInputs(){
              onfocus="selectAllOnFocus(event)"
              ${!c.unitWeight ? 'disabled' : ''}>
       <span style="font-size:11px; color:var(--text-dim); flex:none;">${c.unitWeight ? `(1枚${c.unitWeight}g)` : '1枚重量未登録'}</span>
+      <button class="rm-btn" style="font-size:10px; border:1px solid var(--felt-bright); color:var(--felt-bright); border-radius:6px; padding:3px 6px; flex:none;" onclick="applyLiveBleWeight(${i})" title="Bluetoothスケールの現在値を反映">📥</button>
     </div>
   `).join('');
+}
+
+// ---- Bluetooth標準規格(Weight Scale Service)対応スケールとの連携(実験) ----
+let bleLatestWeightGrams = null;
+let bleDevice = null;
+
+async function connectBleScale(){
+  const statusEl = document.getElementById('bleScaleStatus');
+  if(!navigator.bluetooth){
+    statusEl.innerHTML = `<span style="color:var(--danger)">この端末・ブラウザはWeb Bluetoothに対応していません(iPhoneのSafariは非対応です。Android Chromeをお試しください)。</span>`;
+    return;
+  }
+  statusEl.textContent = '端末を検索中...';
+  try{
+    bleDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ services: ['weight_scale'] }]
+    });
+    statusEl.textContent = `${bleDevice.name || 'デバイス'}に接続中...`;
+
+    const server = await bleDevice.gatt.connect();
+    const service = await server.getPrimaryService('weight_scale');
+    const characteristic = await service.getCharacteristic('weight_measurement');
+
+    await characteristic.startNotifications();
+    characteristic.addEventListener('characteristicvaluechanged', onBleWeightChanged);
+
+    statusEl.innerHTML = `<span style="color:var(--felt-bright)">✓ 接続しました: ${bleDevice.name || 'デバイス'}(計量モード欄の📥ボタンで反映できます)</span>`;
+  }catch(err){
+    statusEl.innerHTML = `<span style="color:var(--danger)">✕ 接続失敗: [${err.name}] ${err.message}(この製品が標準Weight Scale Serviceに対応していない可能性があります)</span>`;
+  }
+}
+
+function onBleWeightChanged(e){
+  const data = e.target.value; // DataView
+  const flags = data.getUint8(0);
+  const isImperial = (flags & 0x01) === 1;
+  // Weight Measurement特性: flags(1byte)の後にweight値(uint16, リトルエンディアン)
+  const raw = data.getUint16(1, /* littleEndian */ true);
+  const grams = isImperial ? raw * 0.01 * 453.592 : raw * 0.005 * 1000; // SI:0.005kg単位, Imperial:0.01lb単位
+  bleLatestWeightGrams = grams;
+
+  const statusEl = document.getElementById('bleScaleStatus');
+  if(statusEl){
+    statusEl.innerHTML = `<span style="color:var(--felt-bright)">✓ 接続中 — 現在値: ${grams.toFixed(1)}g(📥ボタンで各色欄に反映)</span>`;
+  }
+}
+
+function applyLiveBleWeight(i){
+  if(bleLatestWeightGrams === null){
+    alert('まだBluetoothスケールから値を受信していません。先に「🔌Bluetoothスケールに接続」してください。');
+    return;
+  }
+  const input = document.getElementById(`weight-input-${i}`);
+  if(input){
+    input.value = bleLatestWeightGrams.toFixed(1);
+  }
 }
 
 function runWeightMode(){
