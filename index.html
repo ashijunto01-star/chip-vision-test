@@ -268,6 +268,14 @@
   </div>
   <button class="cap-btn" style="background:var(--purple, #7f77dd);" onclick="startArExperimentV2()">📷 基準チップ+スタックを一緒に撮影</button>
   <div id="arResultArea" style="display:none; margin-top:14px;">
+    <div class="row2" style="margin-bottom:8px;">
+      <span style="width:90px; flex:none; font-size:13px;">対象の色</span>
+      <select id="ar-color-select" style="flex:1;" onchange="recomputeArResult()"></select>
+    </div>
+    <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:13px; color:var(--text-dim);">
+      <input type="checkbox" id="arAutoDetectToggle" style="width:auto;">
+      🤖 高さの自動検出(スタックの中央付近を1回タップするだけで、その色が続く上端・下端を自動でスキャン)
+    </label>
     <div class="hint" style="margin-bottom:8px;" id="arTapInstruction">① 立てた基準チップの厚み方向の両端(上端→下端)を2回タップしてください。</div>
     <div style="display:flex; gap:8px; margin-bottom:8px;">
       <button class="cap-btn secondary" style="margin:0; flex:1; padding:8px;" onclick="cycleArZoom()">🔍 拡大(<span id="arZoomLabel">x1</span>)</button>
@@ -282,10 +290,6 @@
     </div>
     <div class="hint" style="margin-top:6px;">拡大時は画像を上下左右にスクロールしながらタップできます。</div>
     <div id="arCalcResult" style="margin-top:10px; font-family:var(--mono); font-size:13px;"></div>
-    <div class="row2" style="margin-top:10px;">
-      <span style="width:90px; flex:none; font-size:13px;">対象の色</span>
-      <select id="ar-color-select" style="flex:1;" onchange="recomputeArResult()"></select>
-    </div>
     <button class="run-btn" style="margin-top:10px;" onclick="adoptArResult()">この結果を採用</button>
   </div>
 </section>
@@ -1210,6 +1214,28 @@ function onArImageTap(e){
   }
 
   if(arTapStage === 'height'){
+    const autoMode = document.getElementById('arAutoDetectToggle').checked;
+    if(autoMode){
+      const colorName = document.getElementById('ar-color-select').value;
+      const chip = chipColors.find(c => c.name === colorName);
+      if(!chip || !chip.detectedColor){
+        alert('この色には参照写真(検出色)が登録されていません。自動検出には色設定欄で参照写真を登録してください。');
+        return;
+      }
+      const detected = autoDetectHeightFromSeed(img, point.videoX, point.videoY, chip.detectedColor);
+      if(!detected){
+        alert('タップした位置の色が、登録されている色と大きく異なります。スタックの中央付近をもう少し正確にタップしてください。');
+        return;
+      }
+      arHeightPoints = [
+        { videoX: point.videoX, videoY: detected.topY, cssX: point.cssX, cssY: 0 },
+        { videoX: point.videoX, videoY: detected.bottomY, cssX: point.cssX, cssY: 0 }
+      ];
+      redrawArOverlay();
+      recomputeArResult();
+      return;
+    }
+
     arHeightPoints.push(point);
     if(arHeightPoints.length > 2) arHeightPoints.shift();
     redrawArOverlay();
@@ -1218,6 +1244,45 @@ function onArImageTap(e){
       recomputeArResult();
     }
   }
+}
+
+// ---- 自動検出: タップ地点を起点に、同じ色が続く範囲(上端・下端)をスキャンする ----
+function autoDetectHeightFromSeed(img, seedX, seedY, detectedColorStr){
+  const m = detectedColorStr.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+  if(!m) return null;
+  const targetR = parseInt(m[1]), targetG = parseInt(m[2]), targetB = parseInt(m[3]);
+  const threshold = 45; // 色距離の許容閾値(要調整の可能性あり)
+
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+
+  const x = Math.round(seedX);
+  const bandHalf = 3; // タップX座標の左右±3pxを平均して1行分の色を代表させる(ノイズ対策)
+  const xStart = Math.max(0, x - bandHalf);
+  const xEnd = Math.min(canvas.width - 1, x + bandHalf);
+  const bandWidth = xEnd - xStart + 1;
+
+  function rowMatches(y){
+    const data = ctx.getImageData(xStart, y, bandWidth, 1).data;
+    let r=0,g=0,b=0,n=0;
+    for(let i=0;i<data.length;i+=4){ r+=data[i]; g+=data[i+1]; b+=data[i+2]; n++; }
+    r/=n; g/=n; b/=n;
+    const dist = Math.sqrt((r-targetR)**2 + (g-targetG)**2 + (b-targetB)**2);
+    return dist < threshold;
+  }
+
+  const seedYInt = Math.round(seedY);
+  if(seedYInt < 0 || seedYInt >= canvas.height || !rowMatches(seedYInt)) return null;
+
+  let topY = seedYInt;
+  while(topY > 0 && rowMatches(topY - 1)) topY--;
+  let bottomY = seedYInt;
+  while(bottomY < canvas.height - 1 && rowMatches(bottomY + 1)) bottomY++;
+
+  return { topY, bottomY };
 }
 
 // ---- 色ごとの実測校正(5枚/10枚の高さ)から、有効な1枚厚みを算出 ----
