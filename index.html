@@ -254,13 +254,13 @@
 </section>
 
 <section>
-  <h2>🧪 実験: 側面高さ計測(写真内スケール較正 v2)</h2>
+  <h2>🧪 実験: 側面高さ計測(写真内スケール較正 v3)</h2>
   <div class="hint" style="margin-bottom:10px;">
-    正式な精算には使わないでください(検証専用)。<b>基準チップ1枚を横に寝かせて、スタックと同じ平面に並べて1枚の写真に収めてください。</b>カメラを動かさずに2段階撮影する方式より、こちらの方が距離のズレに影響されません。
+    正式な精算には使わないでください(検証専用)。<b>基準チップ1枚をコインのように立てて、スタックのすぐ隣に同じ距離感で置いてください。</b>寝かせて直径で較正する方式(v2)は、カメラの角度によって高さ方向とは異なる歪みを受けるため、測りたい軸(高さ)と同じ軸(厚み)で較正するこの方式の方が正確です。
   </div>
   <div class="row2" style="margin-bottom:8px;">
-    <span style="width:90px; flex:none; font-size:13px;">直径(mm)</span>
-    <input type="text" inputmode="decimal" id="ar-diameter" placeholder="例: 40">
+    <span style="width:90px; flex:none; font-size:13px;">直径(mm・参考)</span>
+    <input type="text" inputmode="decimal" id="ar-diameter" placeholder="現在この機能では未使用">
   </div>
   <div class="row2" style="margin-bottom:10px;">
     <span style="width:90px; flex:none; font-size:13px;">厚み(mm)</span>
@@ -268,7 +268,7 @@
   </div>
   <button class="cap-btn" style="background:var(--purple, #7f77dd);" onclick="startArExperimentV2()">📷 基準チップ+スタックを一緒に撮影</button>
   <div id="arResultArea" style="display:none; margin-top:14px;">
-    <div class="hint" style="margin-bottom:8px;" id="arTapInstruction">① 寝かせた基準チップの直径の両端(左端→右端)を2回タップしてください。</div>
+    <div class="hint" style="margin-bottom:8px;" id="arTapInstruction">① 立てた基準チップの厚み方向の両端(上端→下端)を2回タップしてください。</div>
     <div style="display:flex; gap:8px; margin-bottom:8px;">
       <button class="cap-btn secondary" style="margin:0; flex:1; padding:8px;" onclick="cycleArZoom()">🔍 拡大(<span id="arZoomLabel">x1</span>)</button>
       <button class="cap-btn secondary" style="margin:0; flex:1; padding:8px;" onclick="redoArReference()">🔄 ①からやり直し</button>
@@ -1073,15 +1073,14 @@ let arHeightPoints = [];
 let arZoomLevel = 1;
 
 function startArExperimentV2(){
-  const diameter = parseFloat(document.getElementById('ar-diameter').value);
   const thickness = parseFloat(document.getElementById('ar-thickness').value);
-  if(!diameter || diameter <= 0 || !thickness || thickness <= 0){
+  if(!thickness || thickness <= 0){
     const errorBox = document.getElementById('errorBox');
     errorBox.style.display = 'block';
-    errorBox.textContent = '直径・厚み(mm)を先に入力してください。';
+    errorBox.textContent = '厚み(mm)を先に入力してください。';
     return;
   }
-  openCamera(onArV2Captured, 1920, '基準チップ(横に寝かせた1枚)とスタックを同じ平面に並べて撮影してください');
+  openCamera(onArV2Captured, 1920, '基準チップ(立てた1枚)とスタックを同じ距離感で並べて撮影してください');
 }
 
 function onArV2Captured(result){
@@ -1097,7 +1096,7 @@ function onArV2Captured(result){
   document.getElementById('arResultArea').style.display = 'block';
   document.getElementById('arCalcResult').textContent = '';
   document.getElementById('arTapOverlay').innerHTML = '';
-  document.getElementById('arTapInstruction').textContent = '① 寝かせた基準チップの直径の両端(左端→右端)を2回タップしてください。';
+  document.getElementById('arTapInstruction').textContent = '① 立てた基準チップの厚み方向の両端(上端→下端)を2回タップしてください。';
 
   const select = document.getElementById('ar-color-select');
   select.innerHTML = chipColors.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
@@ -1116,9 +1115,51 @@ function applyArZoom(){
   if(!img.naturalWidth) return;
   const baseWidth = scrollBox.clientWidth;
   img.style.width = (baseWidth * arZoomLevel) + 'px';
-  document.getElementById('arZoomLabel').textContent = `x${arZoomLevel}`;
+  document.getElementById('arZoomLabel').textContent = `x${arZoomLevel.toFixed(1)}`;
   redrawArOverlay();
 }
+
+// ---- 2本指ピンチズーム ----
+let arPinchState = null;
+function setupArPinchZoom(){
+  const box = document.getElementById('arImageScrollBox');
+  if(!box) return;
+
+  box.addEventListener('touchstart', (e) => {
+    if(e.touches.length === 2){
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      arPinchState = {
+        startDist: Math.hypot(dx, dy),
+        startWidth: document.getElementById('arCapturedImage').clientWidth
+      };
+    }
+  }, { passive: true });
+
+  box.addEventListener('touchmove', (e) => {
+    if(e.touches.length === 2 && arPinchState){
+      e.preventDefault();
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.hypot(dx, dy);
+      const scale = dist / arPinchState.startDist;
+      const boxWidth = box.clientWidth;
+      let newWidth = arPinchState.startWidth * scale;
+      newWidth = Math.max(boxWidth * 0.5, Math.min(boxWidth * 6, newWidth));
+
+      const img = document.getElementById('arCapturedImage');
+      img.style.width = newWidth + 'px';
+      arZoomLevel = newWidth / boxWidth;
+      document.getElementById('arZoomLabel').textContent = `x${arZoomLevel.toFixed(1)}`;
+      redrawArOverlay();
+    }
+  }, { passive: false });
+
+  box.addEventListener('touchend', (e) => {
+    if(e.touches.length < 2) arPinchState = null;
+  });
+}
+setupArPinchZoom();
 
 // ---- タップのやり直し ----
 function redoArReference(){
@@ -1128,7 +1169,7 @@ function redoArReference(){
   arPxPerMm = null;
   window._arLastCalc = null;
   document.getElementById('arCalcResult').textContent = '';
-  document.getElementById('arTapInstruction').textContent = '① 寝かせた基準チップの直径の両端(左端→右端)を2回タップしてください。';
+  document.getElementById('arTapInstruction').textContent = '① 立てた基準チップの厚み方向の両端(上端→下端)を2回タップしてください。';
   redrawArOverlay();
 }
 function redoArHeight(){
@@ -1160,8 +1201,8 @@ function onArImageTap(e){
 
     if(arRefPoints.length === 2){
       const pxDist = Math.hypot(arRefPoints[1].videoX - arRefPoints[0].videoX, arRefPoints[1].videoY - arRefPoints[0].videoY);
-      const diameterMm = parseFloat(document.getElementById('ar-diameter').value);
-      arPxPerMm = pxDist / diameterMm;
+      const thicknessMm = parseFloat(document.getElementById('ar-thickness').value);
+      arPxPerMm = pxDist / thicknessMm;
       arTapStage = 'height';
       document.getElementById('arTapInstruction').textContent = `② 較正完了(${arPxPerMm.toFixed(2)}px/mm)。次にスタックの上端→下端の順に2回タップしてください。`;
     }
