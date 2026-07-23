@@ -261,6 +261,38 @@
 </section>
 
 <section>
+  <h2>💰 バイイン・キャッシュアウト台帳</h2>
+  <div class="hint" style="margin-bottom:10px;">
+    プレイヤーごとのバイイン・キャッシュアウトを記録します。全端末で共有され、全員の純増減の合計がゼロになるかを自動でチェックします(ゼロサム検算)。
+  </div>
+  <div class="row2" style="margin-bottom:8px;">
+    <span style="width:70px; flex:none; font-size:13px;">プレイヤー</span>
+    <input type="text" id="ledger-player-name" placeholder="名前を入力">
+  </div>
+  <div class="row2" style="margin-bottom:10px;">
+    <span style="width:70px; flex:none; font-size:13px;">種別</span>
+    <select id="ledger-event-type" style="flex:1;">
+      <option value="buyin">バイイン(現金→チップ)</option>
+      <option value="cashout">キャッシュアウト(チップ→現金)</option>
+    </select>
+  </div>
+  <div class="hint" style="margin-bottom:8px;">下の「計量モード」欄に色ごとの総重量を入力してから記録してください。</div>
+  <button class="run-btn" style="background:var(--purple, #7f77dd);" onclick="recordLedgerEntry()">📝 この内容で記録する</button>
+  <div id="ledgerRecordResult" style="margin-top:10px; font-family:var(--mono); font-size:13px;"></div>
+
+  <h2 style="margin-top:24px;">📊 台帳サマリー(全端末共有)</h2>
+  <table>
+    <thead><tr><th>プレイヤー</th><th>バイイン計</th><th>キャッシュアウト計</th><th>純増減</th></tr></thead>
+    <tbody id="ledgerSummaryBody"></tbody>
+  </table>
+  <div id="ledgerZeroSumCheck" style="margin-top:10px; font-family:var(--mono); font-size:14px; text-align:center;"></div>
+  <div style="display:flex; gap:10px; margin-top:14px;">
+    <button class="cap-btn secondary" style="margin:0; flex:1;" onclick="loadLedgerFromServer()">🔄 最新の台帳を読み込む</button>
+    <button class="cap-btn secondary" style="margin:0; flex:1; color:var(--danger); border-color:var(--danger);" onclick="resetLedger()">🗑 台帳を全削除</button>
+  </div>
+</section>
+
+<section>
   <h2><span class="step-num">2b</span>⚖️ 計量モード(Phase 0・画像認識の代わりに重量から算出)</h2>
   <div class="hint" style="margin-bottom:10px;">各色の1枚あたり重量(上の色設定欄)を登録した上で、実際に量った総重量(g)を入力してください。校正は1枚単体ではなく10〜20枚まとめて量って割り算すると精度が上がります。</div>
   <div id="weightModeInputs"></div>
@@ -683,6 +715,7 @@ function loadEndpoint(){
 loadEndpoint();
 loadTrialsFromServer();
 loadChipProfileFromServer(false);
+loadLedgerFromServer();
 
 // ---- 数値フォーマット系(3桁区切り + 0クリア済み入力) ----
 function formatNum(n){
@@ -821,6 +854,12 @@ function renderChipRows(){
                  onblur="updateChipUnitWeight(${i}, this.value, this)">
           <span class="yen-prefix" style="font-size:11px;">g</span>
         </div>
+        <div class="row2" style="background:var(--panel); border-radius:6px; padding:6px 8px;">
+          <span class="yen-prefix" style="font-size:10px; width:64px; flex:none;">精密計量</span>
+          <input type="text" inputmode="numeric" id="precise-count-${i}" placeholder="計量枚数" style="width:60px;" onfocus="selectAllOnFocus(event)">
+          <input type="text" inputmode="decimal" id="precise-weight-${i}" placeholder="総重量g" style="width:70px;" onfocus="selectAllOnFocus(event)">
+          <button class="rm-btn" style="font-size:10px; border:1px solid var(--felt-bright); color:var(--felt-bright); border-radius:6px; padding:3px 8px;" onclick="applyPreciseWeight(${i})">計算→反映</button>
+        </div>
         <div class="row2">
           <span class="yen-prefix" style="font-size:11px;">許容誤差</span>
           <input type="text" inputmode="decimal" value="${c.tolerance !== undefined && c.tolerance !== null ? c.tolerance : ''}" placeholder="デフォルト0.15枚"
@@ -874,6 +913,18 @@ function updateChipDenom(i, val, inputEl){
   chipColors[i].denomAutoDetected = false; // 手動修正したら自動検出バッジは消す
   inputEl.value = formatNum(n);
 }
+function applyPreciseWeight(i){
+  const count = parseFloat(document.getElementById(`precise-count-${i}`).value);
+  const weight = parseFloat(document.getElementById(`precise-weight-${i}`).value);
+  if(!count || count <= 0 || !weight || weight <= 0){
+    alert('計量枚数・総重量を入力してください。');
+    return;
+  }
+  chipColors[i].unitWeight = Math.round((weight / count) * 10000) / 10000;
+  chipColors[i].denomAutoDetected = false;
+  renderChipRows();
+}
+
 function updateChipUnitWeight(i, val, inputEl){
   const n = parseFloat(String(val).replace(/[^0-9.]/g, ''));
   chipColors[i].unitWeight = isNaN(n) ? null : n;
@@ -2671,6 +2722,120 @@ function runWeightMode(){
   renderResults(parsed, []);
   renderWarnings(warnings);
   document.getElementById('statusText').textContent = '計量モードで計算しました';
+}
+
+// ---- バイイン・キャッシュアウト台帳 ----
+let ledgerEntries = [];
+
+function computeWeightBreakdown(){
+  // 現在の計量モード入力欄から、色ごとの内訳と合計金額を計算する(runWeightModeと同じロジック)
+  const breakdown = {};
+  let totalAmount = 0;
+  let hasAny = false;
+
+  chipColors.forEach((c, i) => {
+    const input = document.getElementById(`weight-input-${i}`);
+    if(!input) return;
+    const totalWeight = parseFloat(input.value);
+    if(!totalWeight || totalWeight <= 0) return;
+    if(!c.unitWeight) return;
+
+    const count = Math.round(totalWeight / c.unitWeight);
+    const amount = count * (c.denom || 0);
+    breakdown[c.name] = { count, unit_value: c.denom || 0, amount };
+    totalAmount += amount;
+    hasAny = true;
+  });
+
+  return hasAny ? { breakdown, totalAmount } : null;
+}
+
+async function recordLedgerEntry(){
+  const resultEl = document.getElementById('ledgerRecordResult');
+  const playerName = document.getElementById('ledger-player-name').value.trim();
+  const txType = document.getElementById('ledger-event-type').value;
+
+  if(!playerName){
+    resultEl.innerHTML = `<span style="color:var(--danger)">プレイヤー名を入力してください。</span>`;
+    return;
+  }
+  const result = computeWeightBreakdown();
+  if(!result){
+    resultEl.innerHTML = `<span style="color:var(--danger)">計量モード欄に総重量を入力してから記録してください。</span>`;
+    return;
+  }
+
+  const deviceName = document.getElementById('tag-device')?.value.trim() || '';
+  resultEl.textContent = '記録中...';
+  try{
+    await callDb("save_ledger_entry", {
+      entry: {
+        player_name: playerName,
+        tx_type: txType,
+        chip_breakdown: result.breakdown,
+        total_amount: result.totalAmount,
+        device: deviceName
+      }
+    });
+    resultEl.innerHTML = `<span style="color:var(--felt-bright)">✓ 記録しました: ${playerName} / ${txType === 'buyin' ? 'バイイン' : 'キャッシュアウト'} / ¥${formatNum(result.totalAmount)}</span>`;
+    await loadLedgerFromServer();
+  }catch(err){
+    resultEl.innerHTML = `<span style="color:var(--danger)">✕ 記録失敗: ${err.message}</span>`;
+  }
+}
+
+async function loadLedgerFromServer(){
+  try{
+    const data = await callDb("list_ledger_entries", {});
+    ledgerEntries = data.entries || [];
+    renderLedgerSummary();
+  }catch(err){
+    const el = document.getElementById('ledgerZeroSumCheck');
+    if(el) el.innerHTML = `<span style="color:var(--danger)">読込失敗: ${err.message}</span>`;
+  }
+}
+
+function renderLedgerSummary(){
+  const players = {};
+  ledgerEntries.forEach(e => {
+    if(!players[e.player_name]) players[e.player_name] = { buyin: 0, cashout: 0 };
+    if(e.tx_type === 'buyin') players[e.player_name].buyin += Number(e.total_amount);
+    else players[e.player_name].cashout += Number(e.total_amount);
+  });
+
+  const body = document.getElementById('ledgerSummaryBody');
+  const names = Object.keys(players);
+  if(names.length === 0){
+    body.innerHTML = '<tr><td colspan="4" style="color:var(--text-dim);">まだ記録がありません</td></tr>';
+  } else {
+    body.innerHTML = names.map(name => {
+      const p = players[name];
+      const net = p.cashout - p.buyin;
+      return `<tr><td>${name}</td><td class="num">¥${formatNum(p.buyin)}</td><td class="num">¥${formatNum(p.cashout)}</td><td class="num" style="color:${net>=0?'var(--felt-bright)':'var(--danger)'}">${net>=0?'+':''}${formatNum(net)}</td></tr>`;
+    }).join('');
+  }
+
+  // ---- ゼロサム検算: 全プレイヤーの純増減の合計は理論上ゼロになるはず ----
+  const totalNet = names.reduce((a, name) => a + (players[name].cashout - players[name].buyin), 0);
+  const zeroSumEl = document.getElementById('ledgerZeroSumCheck');
+  if(names.length === 0){
+    zeroSumEl.textContent = '';
+  } else if(Math.abs(totalNet) < 1){
+    zeroSumEl.innerHTML = `<span style="color:var(--felt-bright)">✓ ゼロサム検算OK(全員の純増減合計: ¥${formatNum(totalNet)})</span>`;
+  } else {
+    zeroSumEl.innerHTML = `<span style="color:var(--danger)">⚠ ゼロサムが崩れています。全員の純増減合計が¥${formatNum(totalNet)}(本来¥0のはず)。計測ミス・記録漏れの可能性があります。</span>`;
+  }
+}
+
+async function resetLedger(){
+  if(!confirm(`台帳の全記録(${ledgerEntries.length}件)を削除します。よろしいですか?`)) return;
+  try{
+    await callDb("delete_all_ledger", {});
+    ledgerEntries = [];
+    renderLedgerSummary();
+  }catch(err){
+    alert('削除に失敗しました: ' + err.message);
+  }
 }
 
 async function runRecognition(){
