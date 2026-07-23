@@ -390,6 +390,10 @@
       <input type="checkbox" id="arSnapDisableToggle" style="width:auto;">
       🚫 自動スナップを無効にする(縁の模様に誤って吸着する場合はこちらを有効にしてください)
     </label>
+    <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:13px; color:var(--text-dim);">
+      <input type="checkbox" id="arTiltCorrectionToggle" style="width:auto;" checked>
+      📐 傾き補正を有効にする(過剰補正の疑いがある場合はチェックを外して比較してください)
+    </label>
     <div class="hint" style="margin-bottom:8px;" id="arTapInstruction">① 立てた基準チップの束の側面「内側」(輪郭がぼやけた縁ではなく、面がはっきり見える部分)を2回タップしてください。</div>
     <div class="hint" style="margin-bottom:8px; color:var(--gold);">💡コツ: 基準チップは縁のボケた輪郭を避け側面の内側をタップ。スタックの高さは一番上のチップの「上辺」→一番下のチップの「下辺」を、外枠に沿ってタップすると精度が上がります。</div>
     <div id="arCalibDataList" style="font-size:12px; color:var(--text-dim); margin-bottom:8px;"></div>
@@ -2378,11 +2382,14 @@ function recomputeArResult(){
   const pxHeight = Math.abs(arHeightPoints[1].videoY - arHeightPoints[0].videoY);
   const rawHeightMm = pxHeight / arPxPerMm;
 
-  // ---- 傾き補正: 基準チップと対象スタックは画面内の別位置にあるため、自己相殺は不完全。実測で傾き時の過小カウントが確認されたため補正を適用 ----
+  // ---- 傾き補正: トグルで有効/無効を切り替え可能(過剰補正の疑いがあるため比較用) ----
+  const tiltCorrectionEnabled = document.getElementById('arTiltCorrectionToggle')?.checked;
   const tiltRad = arCaptureTiltDeg * Math.PI / 180;
-  const tiltCorrectionFactor = Math.max(Math.cos(tiltRad), 0.3);
+  const tiltCorrectionFactor = tiltCorrectionEnabled ? Math.max(Math.cos(tiltRad), 0.3) : 1;
   const heightMm = rawHeightMm / tiltCorrectionFactor;
-  const tiltNote = latestTiltBeta === null
+  const tiltNote = !tiltCorrectionEnabled
+    ? `検出傾き${arCaptureTiltDeg.toFixed(1)}°(補正無効)`
+    : latestTiltBeta === null
     ? '傾きセンサー: 未取得'
     : `検出傾き${arCaptureTiltDeg.toFixed(1)}°${arCaptureTiltDeg > 3 ? `を補正(×${(1/tiltCorrectionFactor).toFixed(3)})` : '(補正不要)'}`;
 
