@@ -327,25 +327,27 @@
 <section>
   <h2>📐 実験: マーカー較正(4点透視補正・高精度)</h2>
   <div class="hint" style="margin-bottom:10px;">
-    正式な精算には使わないでください(検証専用)。<b>実寸が分かっている長方形の紙(名刺・印刷用紙など)を、チップの列と同じ卓上に一緒に撮影</b>してください。4隅をタップすることで、画面内の位置ごとの正確な倍率(ホモグラフィ変換)を求め、角度・傾きによる歪みをその場で補正します。
+    正式な精算には使わないでください(検証専用)。<b>実寸が国際規格で厳密に決まっている日本国パスポート(125mm×88mm)を、チップの列と同じ卓上に一緒に撮影</b>してください(名刺など他の実寸既知の長方形でも可)。4隅をタップすることで、画面内の位置ごとの正確な倍率(ホモグラフィ変換)を求め、角度・傾きによる歪みをその場で補正します。
   </div>
   <div class="row2" style="margin-bottom:8px;">
     <span style="width:90px; flex:none; font-size:13px;">マーカー幅(mm)</span>
-    <input type="text" inputmode="decimal" id="marker-width" placeholder="例: 91(名刺の横)">
+    <input type="text" inputmode="decimal" id="marker-width" placeholder="例: 125" value="125">
   </div>
   <div class="row2" style="margin-bottom:10px;">
     <span style="width:90px; flex:none; font-size:13px;">マーカー高さ(mm)</span>
-    <input type="text" inputmode="decimal" id="marker-height" placeholder="例: 55(名刺の縦)">
+    <input type="text" inputmode="decimal" id="marker-height" placeholder="例: 88" value="88">
   </div>
   <button class="cap-btn" style="background:var(--purple, #7f77dd);" onclick="startMarkerCapture()">📷 マーカー+スタックを撮影</button>
   <div id="markerResultArea" style="display:none; margin-top:14px;">
     <div class="hint" style="margin-bottom:8px;" id="markerInstruction">マーカーの左上の角をタップしてください。</div>
+    <button class="cap-btn secondary" style="margin-bottom:8px; padding:8px;" onclick="cycleMarkerZoom()">🔍 拡大(<span id="markerZoomLabel">x1</span>)</button>
     <div id="markerScrollBox" style="max-width:100%; max-height:420px; overflow:auto; border:1px solid var(--panel-line); border-radius:8px;">
       <div style="position:relative; display:inline-block;">
         <img id="markerImage" style="display:block; border-radius:8px;">
         <svg id="markerOverlay" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></svg>
       </div>
     </div>
+    <div class="hint" style="margin-top:6px;">拡大時は画像を上下左右にスクロールしながらタップできます(2本指のピンチでも拡大縮小可)。</div>
     <div id="markerResult" style="margin-top:10px; font-family:var(--mono); font-size:13px;"></div>
     <div class="row2" style="margin-top:10px;">
       <span style="width:90px; flex:none; font-size:13px;">対象の色</span>
@@ -2053,6 +2055,8 @@ let markerCorners = [];
 let markerHeightPoints = [];
 let markerH = null;
 let markerCtx = null;
+let markerZoomLevel = 1;
+let markerPinchState = null;
 let markerCaptureTiltDeg = 0;
 
 function startMarkerCapture(){
@@ -2073,8 +2077,10 @@ function startMarkerCapture(){
 
 function onMarkerCaptured(result){
   markerCaptureTiltDeg = latestTiltBeta !== null ? Math.abs(latestTiltBeta - 90) : 0;
+  markerZoomLevel = 1;
   const img = document.getElementById('markerImage');
   img.onload = () => {
+    applyMarkerZoom();
     const canvas = document.createElement('canvas');
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
@@ -2108,12 +2114,12 @@ function onMarkerTap(e){
   const rawY = (e.clientY - rect.top) * scaleY;
   const snapped = markerCtx ? refineCornerToEdge(markerCtx, rawX, rawY, img.naturalWidth, img.naturalHeight) : { x: rawX, y: rawY };
 
-  const overlay = document.getElementById('markerOverlay');
-  const sx = img.clientWidth / img.naturalWidth, sy = img.clientHeight / img.naturalHeight;
+  const boxRect = document.getElementById('markerScrollBox').getBoundingClientRect();
+  window._markerLastViewportPoint = { x: e.clientX - boxRect.left, y: e.clientY - boxRect.top };
 
   if(markerStage === 'corners'){
     markerCorners.push(snapped);
-    overlay.innerHTML += `<circle cx="${snapped.x*sx}" cy="${snapped.y*sy}" r="6" fill="var(--felt-bright)" stroke="#fff" stroke-width="2"/>`;
+    redrawMarkerOverlay();
 
     if(markerCorners.length < 4){
       document.getElementById('markerInstruction').textContent = `マーカーの${MARKER_CORNER_LABELS[markerCorners.length]}の角をタップしてください。`;
@@ -2126,10 +2132,6 @@ function onMarkerTap(e){
     const dstPoints = [{x:0,y:0}, {x:w,y:0}, {x:w,y:h}, {x:0,y:h}];
     markerH = computeHomography(markerCorners, dstPoints);
 
-    // 閉じた四角形を描画
-    const pts = markerCorners.map(p => `${p.x*sx},${p.y*sy}`).join(' ');
-    overlay.innerHTML += `<polygon points="${pts}" fill="none" stroke="var(--felt-bright)" stroke-width="2"/>`;
-
     markerStage = 'height';
     document.getElementById('markerInstruction').textContent = 'マーカーの較正完了。スタックの一番上のチップの上端外側の縁→一番下のチップの底面外側の縁をタップしてください。';
     return;
@@ -2137,7 +2139,7 @@ function onMarkerTap(e){
 
   if(markerStage === 'height'){
     markerHeightPoints.push(snapped);
-    overlay.innerHTML += `<circle cx="${snapped.x*sx}" cy="${snapped.y*sy}" r="6" fill="var(--gold)" stroke="#fff" stroke-width="2"/>`;
+    redrawMarkerOverlay();
 
     if(markerHeightPoints.length < 2){
       document.getElementById('markerInstruction').textContent = 'スタックの一番下のチップの底面外側の縁をタップしてください。';
@@ -2164,6 +2166,101 @@ function onMarkerTap(e){
     document.getElementById('markerInstruction').textContent = '計測完了。「この結果を採用」で反映するか、別のスタックを続けて測れます(タップし直すとリセットされます)。';
   }
 }
+
+function redrawMarkerOverlay(){
+  const overlay = document.getElementById('markerOverlay');
+  const img = document.getElementById('markerImage');
+  if(!img.naturalWidth){ overlay.innerHTML = ''; return; }
+  const sx = img.clientWidth / img.naturalWidth, sy = img.clientHeight / img.naturalHeight;
+
+  let svg = '';
+  markerCorners.forEach(p => {
+    svg += `<circle cx="${p.x*sx}" cy="${p.y*sy}" r="6" fill="var(--felt-bright)" stroke="#fff" stroke-width="2"/>`;
+  });
+  if(markerCorners.length === 4){
+    const pts = markerCorners.map(p => `${p.x*sx},${p.y*sy}`).join(' ');
+    svg += `<polygon points="${pts}" fill="none" stroke="var(--felt-bright)" stroke-width="2"/>`;
+  }
+  markerHeightPoints.forEach(p => {
+    svg += `<circle cx="${p.x*sx}" cy="${p.y*sy}" r="6" fill="var(--gold)" stroke="#fff" stroke-width="2"/>`;
+  });
+  if(markerHeightPoints.length === 2){
+    const [p1, p2] = markerHeightPoints;
+    svg += `<line x1="${p1.x*sx}" y1="${p1.y*sy}" x2="${p2.x*sx}" y2="${p2.y*sy}" stroke="var(--gold)" stroke-width="2" stroke-dasharray="4"/>`;
+  }
+  overlay.innerHTML = svg;
+}
+
+// ---- マーカー画像の拡大表示(タップ/ピンチ地点を中心に拡大縮小) ----
+function zoomMarkerAround(newWidth, viewportX, viewportY){
+  const box = document.getElementById('markerScrollBox');
+  const img = document.getElementById('markerImage');
+  const oldWidth = img.clientWidth;
+  const oldScrollLeft = box.scrollLeft, oldScrollTop = box.scrollTop;
+  const scale = newWidth / oldWidth;
+
+  img.style.width = newWidth + 'px';
+  markerZoomLevel = newWidth / box.clientWidth;
+
+  box.scrollLeft = (oldScrollLeft + viewportX) * scale - viewportX;
+  box.scrollTop = (oldScrollTop + viewportY) * scale - viewportY;
+
+  document.getElementById('markerZoomLabel').textContent = `x${markerZoomLevel.toFixed(1)}`;
+  redrawMarkerOverlay();
+}
+function cycleMarkerZoom(){
+  const box = document.getElementById('markerScrollBox');
+  const rect = box.getBoundingClientRect();
+  const anchor = window._markerLastViewportPoint || { x: rect.width/2, y: rect.height/2 };
+  const newLevel = markerZoomLevel >= 3 ? 1 : markerZoomLevel + 1;
+  const newWidth = box.clientWidth * newLevel;
+  zoomMarkerAround(newWidth, anchor.x, anchor.y);
+}
+function applyMarkerZoom(){
+  const box = document.getElementById('markerScrollBox');
+  const img = document.getElementById('markerImage');
+  if(!img.naturalWidth) return;
+  img.style.width = (box.clientWidth * markerZoomLevel) + 'px';
+  document.getElementById('markerZoomLabel').textContent = `x${markerZoomLevel.toFixed(1)}`;
+  redrawMarkerOverlay();
+}
+function setupMarkerPinchZoom(){
+  const box = document.getElementById('markerScrollBox');
+  if(!box) return;
+
+  box.addEventListener('touchstart', (e) => {
+    if(e.touches.length === 2){
+      const r = box.getBoundingClientRect();
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      markerPinchState = {
+        startDist: Math.hypot(dx, dy),
+        startWidth: document.getElementById('markerImage').clientWidth,
+        midX: (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left,
+        midY: (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top
+      };
+    }
+  }, { passive: true });
+
+  box.addEventListener('touchmove', (e) => {
+    if(e.touches.length === 2 && markerPinchState){
+      e.preventDefault();
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.hypot(dx, dy);
+      const scale = dist / markerPinchState.startDist;
+      const boxWidth = box.clientWidth;
+      let newWidth = markerPinchState.startWidth * scale;
+      newWidth = Math.max(boxWidth * 0.5, Math.min(boxWidth * 6, newWidth));
+      zoomMarkerAround(newWidth, markerPinchState.midX, markerPinchState.midY);
+    }
+  }, { passive: false });
+
+  box.addEventListener('touchend', (e) => {
+    if(e.touches.length < 2) markerPinchState = null;
+  });
+}
+setupMarkerPinchZoom();
 
 function adoptMarkerResult(){
   if(!window._markerLastCalc){
