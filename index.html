@@ -259,6 +259,33 @@
 </section>
 
 <section>
+  <h2>🧪 実験: 完全自動計測(較正不要・ホスト事前登録)</h2>
+  <div class="hint" style="margin-bottom:10px;">
+    正式な精算には使わないでください(検証専用)。<b>ホスト(ハウス)がチップの直径・厚みを1回だけ測って登録</b>すれば、プレイヤーは以降較正不要で、スタックをタップするだけで色・高さ・幅・枚数を自動計算します。「💾この設定を共有保存」で他端末にも配布されます。
+  </div>
+  <div class="row2" style="margin-bottom:8px;">
+    <span style="width:90px; flex:none; font-size:13px;">チップ直径(mm)</span>
+    <input type="text" inputmode="decimal" id="global-diameter" placeholder="例: 40">
+  </div>
+  <div class="row2" style="margin-bottom:10px;">
+    <span style="width:90px; flex:none; font-size:13px;">チップ厚み(mm)</span>
+    <input type="text" inputmode="decimal" id="global-thickness" placeholder="例: 3.3">
+  </div>
+  <button class="cap-btn" style="background:var(--purple, #7f77dd);" onclick="startAutoModeCapture()">📷 チップの列を撮影</button>
+  <div id="autoModeResultArea" style="display:none; margin-top:14px;">
+    <div class="hint" style="margin-bottom:8px;">各スタックの中央付近を順にタップしてください(色・高さ・幅を自動検出します)。</div>
+    <div id="autoModeScrollBox" style="max-width:100%; max-height:420px; overflow:auto; border:1px solid var(--panel-line); border-radius:8px;">
+      <div style="position:relative; display:inline-block;">
+        <img id="autoModeImage" style="display:block; border-radius:8px;">
+        <svg id="autoModeOverlay" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></svg>
+      </div>
+    </div>
+    <div id="autoModeList" style="margin-top:10px; font-family:var(--mono); font-size:13px;"></div>
+    <button class="run-btn" style="margin-top:10px;" onclick="adoptAutoModeResults()">この結果を採用</button>
+  </div>
+</section>
+
+<section>
   <h2>🧪 実験: 側面高さ計測(写真内スケール較正 v3)</h2>
   <div class="hint" style="margin-bottom:10px;">
     正式な精算には使わないでください(検証専用)。<b>基準チップ1枚をコインのように立てて、スタックのすぐ隣に同じ距離感で置いてください。</b>寝かせて直径で較正する方式(v2)は、カメラの角度によって高さ方向とは異なる歪みを受けるため、測りたい軸(高さ)と同じ軸(厚み)で較正するこの方式の方が正確です。
@@ -1384,10 +1411,155 @@ function autoDetectHeightFromSeed(img, seedX, seedY, detectedColorStr){
   return { topY, bottomY };
 }
 
+// ---- 完全自動計測モード(較正不要): スタック自体の幅を基準チップ代わりに使う ----
+function startAutoModeCapture(){
+  const diameter = parseFloat(document.getElementById('global-diameter').value);
+  const thickness = parseFloat(document.getElementById('global-thickness').value);
+  if(!diameter || diameter <= 0 || !thickness || thickness <= 0){
+    const errorBox = document.getElementById('errorBox');
+    errorBox.style.display = 'block';
+    errorBox.textContent = 'チップの直径・厚み(mm)を先に登録してください(ホストが1回だけ測定・入力)。';
+    return;
+  }
+  openCamera(onAutoModeCaptured, 1920, 'チップの列を横一列に、重ならないよう並べて撮影してください');
+}
+
+let autoModeResults = [];
+
+function onAutoModeCaptured(result){
+  autoModeResults = [];
+  const img = document.getElementById('autoModeImage');
+  img.src = result.dataUrl;
+  document.getElementById('autoModeResultArea').style.display = 'block';
+  document.getElementById('autoModeOverlay').innerHTML = '';
+  document.getElementById('autoModeList').textContent = '';
+  img.onclick = onAutoModeTap;
+}
+
+// ---- タップ地点から、最も近い登録色を判定する ----
+function findNearestRegisteredColor(ctx, x, y){
+  const data = ctx.getImageData(Math.max(0,x-2), Math.max(0,y-2), 5, 5).data;
+  let r=0,g=0,b=0,n=0;
+  for(let i=0;i<data.length;i+=4){ r+=data[i]; g+=data[i+1]; b+=data[i+2]; n++; }
+  r/=n; g/=n; b/=n;
+
+  let best = null, bestDist = Infinity;
+  chipColors.forEach(c => {
+    if(!c.detectedColor) return;
+    const m = c.detectedColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+    if(!m) return;
+    const dist = Math.sqrt((r-parseInt(m[1]))**2 + (g-parseInt(m[2]))**2 + (b-parseInt(m[3]))**2);
+    if(dist < bestDist){ bestDist = dist; best = { color: c.name, rgb: `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})` }; }
+  });
+  if(bestDist > 55) return null; // どの登録色にも十分近くない
+  return best;
+}
+
+// ---- タップ地点を中心に、上下(高さ)・左右(幅)の同色範囲を自動検出 ----
+function autoDetectBoundsFromSeed(ctx, seedX, seedY, targetRgbStr, canvasW, canvasH){
+  const m = targetRgbStr.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+  const targetR = parseInt(m[1]), targetG = parseInt(m[2]), targetB = parseInt(m[3]);
+  const threshold = 45;
+
+  function pixelMatches(x, y){
+    const d = ctx.getImageData(x, y, 1, 1).data;
+    const dist = Math.sqrt((d[0]-targetR)**2 + (d[1]-targetG)**2 + (d[2]-targetB)**2);
+    return dist < threshold;
+  }
+
+  const x0 = Math.round(seedX), y0 = Math.round(seedY);
+  if(x0 < 0 || x0 >= canvasW || y0 < 0 || y0 >= canvasH || !pixelMatches(x0, y0)) return null;
+
+  let topY = y0; while(topY > 0 && pixelMatches(x0, topY - 1)) topY--;
+  let bottomY = y0; while(bottomY < canvasH - 1 && pixelMatches(x0, bottomY + 1)) bottomY++;
+
+  const midY = Math.round((topY + bottomY) / 2);
+  let leftX = x0; while(leftX > 0 && pixelMatches(leftX - 1, midY)) leftX--;
+  let rightX = x0; while(rightX < canvasW - 1 && pixelMatches(rightX + 1, midY)) rightX++;
+
+  return { topY, bottomY, leftX, rightX };
+}
+
+function onAutoModeTap(e){
+  const img = document.getElementById('autoModeImage');
+  const rect = img.getBoundingClientRect();
+  const scaleX = img.naturalWidth / rect.width;
+  const scaleY = img.naturalHeight / rect.height;
+  const videoX = (e.clientX - rect.left) * scaleX;
+  const videoY = (e.clientY - rect.top) * scaleY;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+
+  const matched = findNearestRegisteredColor(ctx, Math.round(videoX), Math.round(videoY));
+  if(!matched){
+    alert('タップした位置が、登録されているどの色にも十分近くありません。スタックの中央付近をタップしてください。');
+    return;
+  }
+  const bounds = autoDetectBoundsFromSeed(ctx, videoX, videoY, matched.rgb, canvas.width, canvas.height);
+  if(!bounds){
+    alert('範囲を検出できませんでした。もう少し正確にタップしてください。');
+    return;
+  }
+
+  const diameterMm = parseFloat(document.getElementById('global-diameter').value);
+  const widthPx = bounds.rightX - bounds.leftX;
+  const pxPerMm = widthPx / diameterMm;
+  const heightPx = bounds.bottomY - bounds.topY;
+  const heightMm = heightPx / pxPerMm;
+  const { thickness: thicknessMm, source } = getEffectiveThicknessForColor(matched.color);
+  const rawCount = heightMm / thicknessMm;
+  const roundedCount = Math.round(rawCount);
+
+  autoModeResults.push({
+    color: matched.color,
+    count: roundedCount,
+    count_basis: `幅${widthPx}px(直径${diameterMm}mm)→${pxPerMm.toFixed(2)}px/mm、高さ${heightPx}px→${heightMm.toFixed(2)}mm÷${thicknessMm.toFixed(3)}mm(${source})=${rawCount.toFixed(2)}枚`,
+    note: '完全自動計測(較正不要)'
+  });
+
+  drawAutoModeOverlay(bounds, img);
+  renderAutoModeList();
+}
+
+function drawAutoModeOverlay(bounds, img){
+  const overlay = document.getElementById('autoModeOverlay');
+  const scaleX = img.clientWidth / img.naturalWidth;
+  const scaleY = img.clientHeight / img.naturalHeight;
+  const rect = `<rect x="${bounds.leftX*scaleX}" y="${bounds.topY*scaleY}" width="${(bounds.rightX-bounds.leftX)*scaleX}" height="${(bounds.bottomY-bounds.topY)*scaleY}" fill="none" stroke="var(--gold)" stroke-width="2"/>`;
+  overlay.innerHTML += rect;
+}
+
+function renderAutoModeList(){
+  const el = document.getElementById('autoModeList');
+  el.innerHTML = autoModeResults.map((r,i) =>
+    `${r.color}: ${r.count}枚 <span style="color:var(--text-dim); font-size:11px;">(${r.count_basis})</span>`
+  ).join('<br>');
+}
+
+function adoptAutoModeResults(){
+  if(autoModeResults.length === 0){
+    alert('先に各スタックをタップして検出してください。');
+    return;
+  }
+  window._lastMeasurementMethod = 'auto-geometric';
+  window._lastElapsed = '0.0';
+  window._lastUsedRefCount = 0;
+  window._lastWarnings = [];
+
+  renderResults(autoModeResults.map(r => ({...r})), []);
+  renderWarnings([]);
+}
+
 // ---- 色ごとの実測校正(5枚/10枚の高さ)から、有効な1枚厚みを算出 ----
 function getEffectiveThicknessForColor(colorName){
   const c = chipColors.find(x => x.name === colorName);
-  const manualThickness = parseFloat(document.getElementById('ar-thickness').value);
+  const arThickness = parseFloat(document.getElementById('ar-thickness')?.value);
+  const globalThickness = parseFloat(document.getElementById('global-thickness')?.value);
+  const manualThickness = !isNaN(arThickness) ? arThickness : globalThickness;
   if(!c) return { thickness: manualThickness, source: '手入力の厚み' };
 
   const pts = [];
@@ -2016,9 +2188,11 @@ async function scoreTrial(){
         ab_group: "A",
         model_variant: window._lastMeasurementMethod === 'weight' ? 'weight-scale-v1'
                       : window._lastMeasurementMethod === 'side-height-ar' ? 'side-height-ar-v1'
+                      : window._lastMeasurementMethod === 'auto-geometric' ? 'auto-geometric-v1'
                       : APP_VERSION,
         model_version: window._lastMeasurementMethod === 'weight' ? 'manual-scale-phase0'
                       : window._lastMeasurementMethod === 'side-height-ar' ? 'manual-tap-calibration'
+                      : window._lastMeasurementMethod === 'auto-geometric' ? 'zero-calibration-auto'
                       : 'claude-sonnet-4-6',
         recognition_result: {
           detail: Object.fromEntries(parsed.map(p => [p.color, { count: p.count, unit_value: (chipColors.find(c=>c.name===p.color)?.denom || 0), confidence: (typeof p.confidence === 'number' ? p.confidence : null) }])),
@@ -2094,7 +2268,12 @@ async function saveChipProfileToServer(){
   const statusEl = document.getElementById('chipProfileStatus');
   statusEl.textContent = '保存中...';
   try{
-    await callDb("save_chip_profile", { chip_colors: chipColors });
+    const payload = {
+      colors: chipColors,
+      global_diameter: document.getElementById('global-diameter').value,
+      global_thickness: document.getElementById('global-thickness').value
+    };
+    await callDb("save_chip_profile", { chip_colors: payload });
     statusEl.innerHTML = `<span style="color:var(--felt-bright)">✓ 共有保存しました(${new Date().toLocaleTimeString('ja-JP')})。他の端末はこれを自動的に読み込みます。</span>`;
   }catch(err){
     statusEl.innerHTML = `<span style="color:var(--danger)">✕ 保存失敗: ${err.message}</span>`;
@@ -2117,7 +2296,10 @@ async function loadChipProfileFromServer(manualTrigger){
       // 自動読み込み時、既に手元で編集中のデータがあれば上書きしない(誤って作業内容を消さないため)
       return;
     }
-    chipColors = data.profile.chip_colors || [];
+    const payload = data.profile.chip_colors || {};
+    chipColors = payload.colors || payload || [];
+    if(payload.global_diameter) document.getElementById('global-diameter').value = payload.global_diameter;
+    if(payload.global_thickness) document.getElementById('global-thickness').value = payload.global_thickness;
     renderChipRows();
     statusEl.innerHTML = `<span style="color:var(--felt-bright)">✓ 共有設定を読み込みました(最終更新: ${new Date(data.profile.updated_at).toLocaleString('ja-JP')})</span>`;
   }catch(err){
