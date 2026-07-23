@@ -1991,7 +1991,15 @@ function getEffectiveThicknessForColor(colorName){
 function recomputeArResult(){
   if(arHeightPoints.length !== 2) return;
   const pxHeight = Math.abs(arHeightPoints[1].videoY - arHeightPoints[0].videoY);
-  const heightMm = pxHeight / arPxPerMm;
+  const rawHeightMm = pxHeight / arPxPerMm;
+
+  // ---- 傾き補正: 基準チップと対象スタックは画面内の別位置にあるため、自己相殺は不完全。実測で傾き時の過小カウントが確認されたため補正を適用 ----
+  const tiltRad = arCaptureTiltDeg * Math.PI / 180;
+  const tiltCorrectionFactor = Math.max(Math.cos(tiltRad), 0.3);
+  const heightMm = rawHeightMm / tiltCorrectionFactor;
+  const tiltNote = latestTiltBeta === null
+    ? '傾きセンサー: 未取得'
+    : `検出傾き${arCaptureTiltDeg.toFixed(1)}°${arCaptureTiltDeg > 3 ? `を補正(×${(1/tiltCorrectionFactor).toFixed(3)})` : '(補正不要)'}`;
 
   const color = document.getElementById('ar-color-select').value;
   const { thickness: thicknessMm, source } = getEffectiveThicknessForColor(color);
@@ -2001,7 +2009,8 @@ function recomputeArResult(){
   window._arLastCalc = { pxHeight, heightMm, thicknessMm, rawCount, roundedCount };
   document.getElementById('arCalcResult').innerHTML =
     `較正(基準チップから直接算出): ${arPxPerMm.toFixed(2)}px/mm<br>` +
-    `タップ間の高さ: ${pxHeight.toFixed(1)}px → ${heightMm.toFixed(2)}mm<br>` +
+    `タップ間の高さ: ${pxHeight.toFixed(1)}px → ${rawHeightMm.toFixed(2)}mm(${tiltNote})<br>` +
+    `補正後の高さ: ${heightMm.toFixed(2)}mm<br>` +
     `使用する1枚厚み: ${thicknessMm.toFixed(4)}mm(${source})<br>` +
     `${heightMm.toFixed(2)}mm ÷ ${thicknessMm.toFixed(4)}mm = <b>${rawCount.toFixed(2)}枚</b> → 採用値: ${roundedCount}枚`;
 }
