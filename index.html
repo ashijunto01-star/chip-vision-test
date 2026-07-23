@@ -259,7 +259,10 @@
 </section>
 
 <section>
-  <h2>🧪 実験: 完全自動計測(較正不要・ホスト事前登録)</h2>
+  <h2>🧪 実験: 完全自動計測(較正不要・ホスト事前登録) ⚠️非推奨</h2>
+  <div class="hint" style="margin-bottom:10px; color:var(--danger);">
+    ⚠️ 実測で「幅(直径軸)」と「高さ(測定軸)」のミスマッチにより、20枚が30枚以上として計算されるなど大きな誤差が確認されています。現時点では下の「側面高さ計測v3」の使用を推奨します。この項目は原因検証のため残していますが、精算には使わないでください。
+  </div>
   <div class="hint" style="margin-bottom:10px;">
     正式な精算には使わないでください(検証専用)。<b>ホスト(ハウス)がチップの直径・厚みを1回だけ測って登録</b>すれば、プレイヤーは以降較正不要で、スタックをタップするだけで色・高さ・幅・枚数を自動計算します。「💾この設定を共有保存」で他端末にも配布されます。
   </div>
@@ -1205,6 +1208,9 @@ function startArExperimentV2(){
   openCamera(onArV2Captured, 1920, '基準チップ(立てた1枚)とスタックを同じ距離感で並べて撮影してください');
 }
 
+let arCtx = null;
+let arCaptureTiltDeg = 0;
+
 function onArV2Captured(result){
   arTapStage = 'reference';
   arRefPoints = [];
@@ -1213,9 +1219,17 @@ function onArV2Captured(result){
   window._arPendingCalib = null;
   arPxPerMm = null;
   arZoomLevel = 1;
+  arCaptureTiltDeg = latestTiltBeta !== null ? Math.abs(latestTiltBeta - 90) : 0;
 
   const img = document.getElementById('arCapturedImage');
-  img.onload = () => applyArZoom();
+  img.onload = () => {
+    applyArZoom();
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    arCtx = canvas.getContext('2d', { willReadFrequently: true });
+    arCtx.drawImage(img, 0, 0);
+  };
   img.src = result.dataUrl;
   document.getElementById('arResultArea').style.display = 'block';
   document.getElementById('arCalcResult').textContent = '';
@@ -1394,7 +1408,9 @@ function onArImageTap(e){
   const cssY = e.clientY - rect.top;
   const scaleX = img.naturalWidth / rect.width;
   const scaleY = img.naturalHeight / rect.height;
-  const point = { videoX: cssX * scaleX, videoY: cssY * scaleY, cssX, cssY };
+  const rawVideoX = cssX * scaleX, rawVideoY = cssY * scaleY;
+  const snapped = arCtx ? refineCornerToEdge(arCtx, rawVideoX, rawVideoY, img.naturalWidth, img.naturalHeight) : { x: rawVideoX, y: rawVideoY };
+  const point = { videoX: snapped.x, videoY: snapped.y, cssX, cssY };
 
   const boxRect = document.getElementById('arImageScrollBox').getBoundingClientRect();
   window._arLastViewportPoint = { x: e.clientX - boxRect.left, y: e.clientY - boxRect.top };
