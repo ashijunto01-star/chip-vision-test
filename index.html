@@ -298,7 +298,8 @@
   <div class="hint" style="margin-bottom:10px; color:var(--gold);">
     🧪 実験: Bluetooth標準規格(Weight Scale Service)対応のスケールがあれば、下のボタンで自動連携を試せます(非対応の場合は今まで通り手入力してください)。
   </div>
-  <button class="cap-btn secondary" style="margin-bottom:10px;" onclick="connectBleScale()">🔌 Bluetoothスケールに接続(実験)</button>
+  <button class="cap-btn secondary" style="margin-bottom:10px;" onclick="connectBleScale()">🔌 Bluetoothスケールに接続(標準規格・実験)</button>
+  <button class="cap-btn secondary" style="margin-bottom:10px; border-color:var(--purple, #7f77dd); color:var(--purple, #7f77dd);" onclick="connectCustomSmartScale()">🔧 自作スマートスケールに接続(NFC連携版)</button>
   <div class="status" id="bleScaleStatus" style="margin-bottom:10px;"></div>
   <div id="weightModeInputs"></div>
   <button class="run-btn" style="background:var(--felt); color:#fff;" onclick="runWeightMode()">⚖️ 重量から枚数を計算</button>
@@ -882,6 +883,12 @@ function renderChipRows(){
                  onfocus="selectAllOnFocus(event)"
                  onblur="updateChipHeightCalib(${i}, 'height10mm', this.value, this)">
         </div>
+        <div class="row2">
+          <span class="yen-prefix" style="font-size:11px;">📡NFCタグID</span>
+          <input type="text" value="${c.nfcTagId || ''}" placeholder="この色の容器に付けたタグID(任意)"
+                 onfocus="selectAllOnFocus(event)"
+                 onblur="updateChipNfcTag(${i}, this.value, this)">
+        </div>
         ${c.pendingDenom !== undefined ? `
           <div style="background:var(--panel); border:1px solid var(--gold); border-radius:8px; padding:8px 10px; margin-top:6px; font-size:12px;">
             画像内に「${c.pendingVisibleText}」という印字を検出しました。額面を¥${formatNum(c.pendingDenom)}に設定しますか?
@@ -946,8 +953,12 @@ function updateChipHeightCalib(i, field, val, inputEl){
   chipColors[i][field] = isNaN(n) ? null : n;
   inputEl.value = chipColors[i][field] !== null ? String(chipColors[i][field]) : '';
 }
+function updateChipNfcTag(i, val, inputEl){
+  chipColors[i].nfcTagId = val.trim() || null;
+  inputEl.value = chipColors[i].nfcTagId || '';
+}
 function removeChip(i){ chipColors.splice(i,1); renderChipRows(); }
-function addChipRow(){ chipColors.push({name:'', denom:0, unitWeight:null, tolerance:null, height5mm:null, height10mm:null, refBase64:null, refMime:null, refThumb:null, denomAutoDetected:false, denomDetecting:false}); renderChipRows(); }
+function addChipRow(){ chipColors.push({name:'', denom:0, unitWeight:null, tolerance:null, height5mm:null, height10mm:null, nfcTagId:null, refBase64:null, refMime:null, refThumb:null, denomAutoDetected:false, denomDetecting:false}); renderChipRows(); }
 
 async function onRefFileSelected(i, e){
   const file = e.target.files[0];
@@ -2730,6 +2741,67 @@ function applyLiveBleWeight(i){
   const input = document.getElementById(`weight-input-${i}`);
   if(input){
     input.value = bleLatestWeightGrams.toFixed(1);
+  }
+}
+
+// ---- 自作スマートスケール(ESP32+HX711+NFC/RFID)との連携 ----
+// ファームウェア側は下記のService/Characteristic UUIDで、
+// {"tag":"A1234567","weight":1523.4,"timestamp":"..."} という形式のJSON文字列を
+// Notify(値変更通知)で送信してください。
+const CUSTOM_SCALE_SERVICE_UUID = '12345678-1234-5678-1234-56789abcdef0';
+const CUSTOM_SCALE_CHAR_UUID    = '12345678-1234-5678-1234-56789abcdef1';
+
+async function connectCustomSmartScale(){
+  const statusEl = document.getElementById('bleScaleStatus');
+  if(!navigator.bluetooth){
+    statusEl.innerHTML = `<span style="color:var(--danger)">この端末・ブラウザはWeb Bluetoothに対応していません(Android Chromeをお使いください)。</span>`;
+    return;
+  }
+  statusEl.textContent = '自作スケールを検索中...';
+  try{
+    bleDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [CUSTOM_SCALE_SERVICE_UUID] }]
+    });
+    statusEl.textContent = `${bleDevice.name || 'デバイス'}に接続中...`;
+
+    const server = await bleDevice.gatt.connect();
+    const service = await server.getPrimaryService(CUSTOM_SCALE_SERVICE_UUID);
+    const characteristic = await service.getCharacteristic(CUSTOM_SCALE_CHAR_UUID);
+
+    await characteristic.startNotifications();
+    characteristic.addEventListener('characteristicvaluechanged', onCustomScaleDataChanged);
+
+    statusEl.innerHTML = `<span style="color:var(--felt-bright)">✓ 接続しました: ${bleDevice.name || 'デバイス'}(NFCタグを登録した色は自動で反映されます)</span>`;
+  }catch(err){
+    statusEl.innerHTML = `<span style="color:var(--danger)">✕ 接続失敗: [${err.name}] ${err.message}</span>`;
+  }
+}
+
+function onCustomScaleDataChanged(e){
+  const statusEl = document.getElementById('bleScaleStatus');
+  try{
+    const decoder = new TextDecoder('utf-8');
+    const jsonStr = decoder.decode(e.target.value);
+    const payload = JSON.parse(jsonStr);
+    const { tag, weight } = payload;
+
+    bleLatestWeightGrams = weight;
+
+    if(tag){
+      const chip = chipColors.find(c => c.nfcTagId === tag);
+      if(chip){
+        const idx = chipColors.indexOf(chip);
+        const input = document.getElementById(`weight-input-${idx}`);
+        if(input) input.value = Number(weight).toFixed(1);
+        statusEl.innerHTML = `<span style="color:var(--felt-bright)">✓ タグ「${tag}」→「${chip.name}」に ${Number(weight).toFixed(1)}g を自動反映しました</span>`;
+        return;
+      }
+      statusEl.innerHTML = `<span style="color:var(--gold)">⚠ 未登録のタグ「${tag}」(${Number(weight).toFixed(1)}g)。色設定欄でこのタグIDを登録してください。</span>`;
+      return;
+    }
+    statusEl.innerHTML = `<span style="color:var(--felt-bright)">✓ 現在値: ${Number(weight).toFixed(1)}g(タグ未検出・📥ボタンで手動反映)</span>`;
+  }catch(err){
+    statusEl.innerHTML = `<span style="color:var(--danger)">受信データの解析に失敗しました: ${err.message}</span>`;
   }
 }
 
