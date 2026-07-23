@@ -348,6 +348,10 @@
       <input type="checkbox" id="arAutoDetectToggle" style="width:auto;">
       🤖 高さの自動検出(スタックの中央付近を1回タップするだけで、その色が続く上端・下端を自動でスキャン)
     </label>
+    <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:13px; color:var(--text-dim);">
+      <input type="checkbox" id="arSnapDisableToggle" style="width:auto;">
+      🚫 自動スナップを無効にする(縁の模様に誤って吸着する場合はこちらを有効にしてください)
+    </label>
     <div class="hint" style="margin-bottom:8px;" id="arTapInstruction">① 立てた基準チップの束の側面「内側」(輪郭がぼやけた縁ではなく、面がはっきり見える部分)を2回タップしてください。</div>
     <div class="hint" style="margin-bottom:8px; color:var(--gold);">💡コツ: 基準チップは縁のボケた輪郭を避け側面の内側をタップ。スタックの高さは一番上のチップの「上辺」→一番下のチップの「下辺」を、外枠に沿ってタップすると精度が上がります。</div>
     <div id="arCalibDataList" style="font-size:12px; color:var(--text-dim); margin-bottom:8px;"></div>
@@ -1409,7 +1413,8 @@ function onArImageTap(e){
   const scaleX = img.naturalWidth / rect.width;
   const scaleY = img.naturalHeight / rect.height;
   const rawVideoX = cssX * scaleX, rawVideoY = cssY * scaleY;
-  const snapped = arCtx ? refineCornerToEdge(arCtx, rawVideoX, rawVideoY, img.naturalWidth, img.naturalHeight) : { x: rawVideoX, y: rawVideoY };
+  const snapDisabled = document.getElementById('arSnapDisableToggle')?.checked;
+  const snapped = (arCtx && !snapDisabled) ? refineCornerToEdge(arCtx, rawVideoX, rawVideoY, img.naturalWidth, img.naturalHeight) : { x: rawVideoX, y: rawVideoY };
   const point = { videoX: snapped.x, videoY: snapped.y, cssX, cssY };
 
   const boxRect = document.getElementById('arImageScrollBox').getBoundingClientRect();
@@ -1624,7 +1629,7 @@ function refineViaProfile(profile){
     grads[i] = Math.abs(profile[i+1] - profile[i]);
     if(grads[i] > maxGrad){ maxGrad = grads[i]; maxIdx = i; }
   }
-  if(maxGrad < 8) return null; // 十分に強い境界が見つからない場合はスナップしない
+  if(maxGrad < 25) return null; // 十分に強い境界が見つからない場合はスナップしない(閾値を引き上げ、模様への誤吸着を防止)
   if(maxIdx <= 0 || maxIdx >= n - 2) return maxIdx + 0.5;
   // 勾配のピーク位置を放物線フィッティングでサブピクセル推定
   const fm1 = grads[maxIdx-1], f0 = grads[maxIdx], fp1 = grads[maxIdx+1];
@@ -1634,7 +1639,7 @@ function refineViaProfile(profile){
 }
 
 function refineCornerToEdge(ctx, tapX, tapY, canvasW, canvasH){
-  const searchRadius = 15, bandHalf = 2;
+  const searchRadius = 6, bandHalf = 2;
 
   // X方向: タップ点の左右±searchRadiusで、輝度勾配が最大の位置をサブピクセルで探す
   const y0 = Math.max(0, Math.round(tapY) - bandHalf);
