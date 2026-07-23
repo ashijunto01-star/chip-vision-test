@@ -254,9 +254,9 @@
 </section>
 
 <section>
-  <h2>🧪 実験: 側面高さ計測(AR風スケール較正)</h2>
+  <h2>🧪 実験: 側面高さ計測(写真内スケール較正 v2)</h2>
   <div class="hint" style="margin-bottom:10px;">
-    正式な精算には使わないでください(検証専用)。チップの実寸を使って画面上でスケールを較正し、スタックの高さから枚数を逆算します。
+    正式な精算には使わないでください(検証専用)。<b>基準チップ1枚を横に寝かせて、スタックと同じ平面に並べて1枚の写真に収めてください。</b>カメラを動かさずに2段階撮影する方式より、こちらの方が距離のズレに影響されません。
   </div>
   <div class="row2" style="margin-bottom:8px;">
     <span style="width:90px; flex:none; font-size:13px;">直径(mm)</span>
@@ -266,9 +266,9 @@
     <span style="width:90px; flex:none; font-size:13px;">厚み(mm)</span>
     <input type="text" inputmode="decimal" id="ar-thickness" placeholder="例: 3.3">
   </div>
-  <button class="cap-btn" style="background:var(--purple, #7f77dd);" onclick="startArExperiment()">📷 較正を開始</button>
+  <button class="cap-btn" style="background:var(--purple, #7f77dd);" onclick="startArExperimentV2()">📷 基準チップ+スタックを一緒に撮影</button>
   <div id="arResultArea" style="display:none; margin-top:14px;">
-    <div class="hint" style="margin-bottom:8px;">写真の中の「スタック上端」→「スタック下端」の順に2回タップしてください。</div>
+    <div class="hint" style="margin-bottom:8px;" id="arTapInstruction">① 寝かせた基準チップの直径の両端(左端→右端)を2回タップしてください。</div>
     <div style="position:relative; display:inline-block; max-width:100%;">
       <img id="arCapturedImage" style="max-width:100%; border-radius:8px; border:1px solid var(--panel-line);">
       <svg id="arTapOverlay" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></svg>
@@ -941,7 +941,6 @@ async function openCamera(onCaptured, maxEdge, guideText){
       video.srcObject = activeStream;
       await video.play();
       startLiveAnalysis();
-      if(arActive){ document.getElementById('calibrationRing').style.display = 'block'; }
     }catch(err){
       closeCamera();
       showCameraError(`カメラを起動できませんでした。[${err.name || 'Error'}] ${err.message || err}\n「写真を選択」をお使いください。`);
@@ -1030,11 +1029,6 @@ async function triggerCapture(){
   const video = document.getElementById('cameraVideo');
   if(!video.videoWidth){ return; }
 
-  if(arActive){
-    handleArShutter(video);
-    return;
-  }
-
   const rawCanvas = document.createElement('canvas');
   rawCanvas.width = video.videoWidth;
   rawCanvas.height = video.videoHeight;
@@ -1049,12 +1043,12 @@ async function triggerCapture(){
 }
 
 // ---- 実験: 側面高さ計測(ARスケール較正) ----
-let arActive = false;
-let arStage = null; // 'calibrating' | 'ready'
 let arPxPerMm = null;
-let arTapPoints = [];
+let arTapStage = 'reference'; // 'reference' | 'height'
+let arRefPoints = [];
+let arHeightPoints = [];
 
-function startArExperiment(){
+function startArExperimentV2(){
   const diameter = parseFloat(document.getElementById('ar-diameter').value);
   const thickness = parseFloat(document.getElementById('ar-thickness').value);
   if(!diameter || diameter <= 0 || !thickness || thickness <= 0){
@@ -1063,48 +1057,21 @@ function startArExperiment(){
     errorBox.textContent = '直径・厚み(mm)を先に入力してください。';
     return;
   }
-  arActive = true;
-  arStage = 'calibrating';
+  openCamera(onArV2Captured, 1920, '基準チップ(横に寝かせた1枚)とスタックを同じ平面に並べて撮影してください');
+}
+
+function onArV2Captured(result){
+  arTapStage = 'reference';
+  arRefPoints = [];
+  arHeightPoints = [];
   arPxPerMm = null;
-  arTapPoints = [];
-  openCamera(null, 1920, '① チップ1枚をガイド枠に合わせて距離を調整し、シャッターを押してください');
-}
 
-function handleArShutter(video){
-  if(arStage === 'calibrating'){
-    const ring = document.getElementById('calibrationRing');
-    const ringCssDiameter = ring.offsetWidth;
-    const scale = video.videoWidth / video.clientWidth;
-    const ringDiameterInVideoPx = ringCssDiameter * scale;
-    const diameterMm = parseFloat(document.getElementById('ar-diameter').value);
-    arPxPerMm = ringDiameterInVideoPx / diameterMm;
-
-    arStage = 'ready';
-    ring.style.display = 'none';
-    document.getElementById('cameraGuide').textContent = '② カメラを動かさず、スタックを並べてシャッターを押してください(距離を変えないこと)';
-    return; // カメラは開いたまま、次のシャッターを待つ
-  }
-
-  if(arStage === 'ready'){
-    const rawCanvas = document.createElement('canvas');
-    rawCanvas.width = video.videoWidth;
-    rawCanvas.height = video.videoHeight;
-    rawCanvas.getContext('2d').drawImage(video, 0, 0);
-    closeCamera();
-    arActive = false;
-    arStage = null;
-    const dataUrl = rawCanvas.toDataURL('image/jpeg', 0.9);
-    showArCapturedImage(dataUrl);
-  }
-}
-
-function showArCapturedImage(dataUrl){
-  arTapPoints = [];
   const img = document.getElementById('arCapturedImage');
-  img.src = dataUrl;
+  img.src = result.dataUrl;
   document.getElementById('arResultArea').style.display = 'block';
   document.getElementById('arCalcResult').textContent = '';
   document.getElementById('arTapOverlay').innerHTML = '';
+  document.getElementById('arTapInstruction').textContent = '① 寝かせた基準チップの直径の両端(左端→右端)を2回タップしてください。';
 
   const select = document.getElementById('ar-color-select');
   select.innerHTML = chipColors.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
@@ -1119,35 +1086,65 @@ function onArImageTap(e){
   const cssY = e.clientY - rect.top;
   const scaleX = img.naturalWidth / rect.width;
   const scaleY = img.naturalHeight / rect.height;
+  const point = { videoX: cssX * scaleX, videoY: cssY * scaleY, cssX, cssY };
 
-  arTapPoints.push({ videoX: cssX * scaleX, videoY: cssY * scaleY, cssX, cssY });
-  if(arTapPoints.length > 2) arTapPoints.shift();
+  if(arTapStage === 'reference'){
+    arRefPoints.push(point);
+    if(arRefPoints.length > 2) arRefPoints.shift();
+    redrawArOverlay();
 
-  const overlay = document.getElementById('arTapOverlay');
-  overlay.innerHTML = arTapPoints.map(p =>
-    `<circle cx="${p.cssX}" cy="${p.cssY}" r="6" fill="var(--gold)" stroke="#fff" stroke-width="2"/>`
-  ).join('') + (arTapPoints.length === 2 ?
-    `<line x1="${arTapPoints[0].cssX}" y1="${arTapPoints[0].cssY}" x2="${arTapPoints[1].cssX}" y2="${arTapPoints[1].cssY}" stroke="var(--gold)" stroke-width="2" stroke-dasharray="4"/>`
-    : '');
-
-  if(arTapPoints.length === 2){
-    const pxHeight = Math.abs(arTapPoints[1].videoY - arTapPoints[0].videoY);
-    const heightMm = pxHeight / arPxPerMm;
-    const thicknessMm = parseFloat(document.getElementById('ar-thickness').value);
-    const rawCount = heightMm / thicknessMm;
-    const roundedCount = Math.round(rawCount);
-
-    window._arLastCalc = { pxHeight, heightMm, thicknessMm, rawCount, roundedCount };
-    document.getElementById('arCalcResult').innerHTML =
-      `較正: ${arPxPerMm.toFixed(2)}px/mm<br>` +
-      `タップ間の高さ: ${pxHeight.toFixed(1)}px → ${heightMm.toFixed(2)}mm<br>` +
-      `${heightMm.toFixed(2)}mm ÷ ${thicknessMm}mm = <b>${rawCount.toFixed(2)}枚</b> → 採用値: ${roundedCount}枚`;
+    if(arRefPoints.length === 2){
+      const pxDist = Math.hypot(arRefPoints[1].videoX - arRefPoints[0].videoX, arRefPoints[1].videoY - arRefPoints[0].videoY);
+      const diameterMm = parseFloat(document.getElementById('ar-diameter').value);
+      arPxPerMm = pxDist / diameterMm;
+      arTapStage = 'height';
+      document.getElementById('arTapInstruction').textContent = `② 較正完了(${arPxPerMm.toFixed(2)}px/mm)。次にスタックの上端→下端の順に2回タップしてください。`;
+    }
+    return;
   }
+
+  if(arTapStage === 'height'){
+    arHeightPoints.push(point);
+    if(arHeightPoints.length > 2) arHeightPoints.shift();
+    redrawArOverlay();
+
+    if(arHeightPoints.length === 2){
+      const pxHeight = Math.abs(arHeightPoints[1].videoY - arHeightPoints[0].videoY);
+      const heightMm = pxHeight / arPxPerMm;
+      const thicknessMm = parseFloat(document.getElementById('ar-thickness').value);
+      const rawCount = heightMm / thicknessMm;
+      const roundedCount = Math.round(rawCount);
+
+      window._arLastCalc = { pxHeight, heightMm, thicknessMm, rawCount, roundedCount };
+      document.getElementById('arCalcResult').innerHTML =
+        `較正(基準チップから直接算出): ${arPxPerMm.toFixed(2)}px/mm<br>` +
+        `タップ間の高さ: ${pxHeight.toFixed(1)}px → ${heightMm.toFixed(2)}mm<br>` +
+        `${heightMm.toFixed(2)}mm ÷ ${thicknessMm}mm = <b>${rawCount.toFixed(2)}枚</b> → 採用値: ${roundedCount}枚`;
+    }
+  }
+}
+
+function redrawArOverlay(){
+  const overlay = document.getElementById('arTapOverlay');
+  let svg = '';
+  if(arRefPoints.length > 0){
+    svg += arRefPoints.map(p => `<circle cx="${p.cssX}" cy="${p.cssY}" r="6" fill="var(--felt-bright)" stroke="#fff" stroke-width="2"/>`).join('');
+    if(arRefPoints.length === 2){
+      svg += `<line x1="${arRefPoints[0].cssX}" y1="${arRefPoints[0].cssY}" x2="${arRefPoints[1].cssX}" y2="${arRefPoints[1].cssY}" stroke="var(--felt-bright)" stroke-width="2" stroke-dasharray="4"/>`;
+    }
+  }
+  if(arHeightPoints.length > 0){
+    svg += arHeightPoints.map(p => `<circle cx="${p.cssX}" cy="${p.cssY}" r="6" fill="var(--gold)" stroke="#fff" stroke-width="2"/>`).join('');
+    if(arHeightPoints.length === 2){
+      svg += `<line x1="${arHeightPoints[0].cssX}" y1="${arHeightPoints[0].cssY}" x2="${arHeightPoints[1].cssX}" y2="${arHeightPoints[1].cssY}" stroke="var(--gold)" stroke-width="2" stroke-dasharray="4"/>`;
+    }
+  }
+  overlay.innerHTML = svg;
 }
 
 function adoptArResult(){
   if(!window._arLastCalc){
-    alert('先にスタック上端・下端を2点タップしてください。');
+    alert('先に基準チップの直径2点、スタック上端・下端2点をタップしてください。');
     return;
   }
   const color = document.getElementById('ar-color-select').value;
@@ -1159,8 +1156,8 @@ function adoptArResult(){
   const parsed = [{
     color,
     count: calc.roundedCount,
-    count_basis: `高さ${calc.heightMm.toFixed(2)}mm ÷ 厚み${calc.thicknessMm}mm = ${calc.rawCount.toFixed(2)}枚(較正${arPxPerMm.toFixed(2)}px/mm)`,
-    note: '側面高さ計測(実験・AR風スケール較正)'
+    count_basis: `高さ${calc.heightMm.toFixed(2)}mm ÷ 厚み${calc.thicknessMm}mm = ${calc.rawCount.toFixed(2)}枚(較正${arPxPerMm.toFixed(2)}px/mm、写真内の基準チップから直接算出)`,
+    note: '側面高さ計測(実験・写真内スケール較正v2)'
   }];
 
   window._lastMeasurementMethod = 'side-height-ar';
@@ -2026,7 +2023,6 @@ function renderLog(){
 <div id="cameraModal">
   <button class="cancel-btn" onclick="closeCamera()">✕</button>
   <video id="cameraVideo" autoplay playsinline muted></video>
-  <div id="calibrationRing"></div>
   <div class="camera-guide" id="cameraGuide"></div>
   <div class="camera-live-status" id="cameraLiveStatus"></div>
   <div class="camera-controls">
