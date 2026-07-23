@@ -240,6 +240,13 @@
 </section>
 
 <section>
+  <h2><span class="step-num">2b</span>⚖️ 計量モード(Phase 0・画像認識の代わりに重量から算出)</h2>
+  <div class="hint" style="margin-bottom:10px;">各色の1枚あたり重量(上の色設定欄)を登録した上で、実際に量った総重量(g)を入力してください。校正は1枚単体ではなく10〜20枚まとめて量って割り算すると精度が上がります。</div>
+  <div id="weightModeInputs"></div>
+  <button class="run-btn" style="background:var(--felt); color:#fff;" onclick="runWeightMode()">⚖️ 重量から枚数を計算</button>
+</section>
+
+<section>
   <button class="run-btn" id="runBtn" onclick="runRecognition()" disabled>この写真で認識を実行</button>
   <div class="status">
     <div class="spinner" id="spinner"></div>
@@ -597,6 +604,13 @@ function renderChipRows(){
           ${!c.denomDetecting && c.denomAutoDetected ? '<span class="badge-noref" style="color:var(--felt-bright);">🔍自動検出</span>' : ''}
           ${!c.denomDetecting && !c.refBase64 ? '<span class="badge-noref">参照写真未登録</span>' : ''}
         </div>
+        <div class="row2">
+          <span class="yen-prefix" style="font-size:11px;">1枚⚖️</span>
+          <input type="text" inputmode="decimal" value="${c.unitWeight || ''}" placeholder="1枚あたり重量(g)"
+                 onfocus="selectAllOnFocus(event)"
+                 onblur="updateChipUnitWeight(${i}, this.value, this)">
+          <span class="yen-prefix" style="font-size:11px;">g</span>
+        </div>
         ${c.pendingDenom !== undefined ? `
           <div style="background:var(--panel); border:1px solid var(--gold); border-radius:8px; padding:8px 10px; margin-top:6px; font-size:12px;">
             画像内に「${c.pendingVisibleText}」という印字を検出しました。額面を¥${formatNum(c.pendingDenom)}に設定しますか?
@@ -624,6 +638,7 @@ function renderChipRows(){
     `;
     container.appendChild(card);
   });
+  renderWeightModeInputs();
 }
 function updateChipName(i, val){ chipColors[i].name = val; renderChipRows(); }
 function updateChipDenom(i, val, inputEl){
@@ -632,8 +647,14 @@ function updateChipDenom(i, val, inputEl){
   chipColors[i].denomAutoDetected = false; // 手動修正したら自動検出バッジは消す
   inputEl.value = formatNum(n);
 }
+function updateChipUnitWeight(i, val, inputEl){
+  const n = parseFloat(String(val).replace(/[^0-9.]/g, ''));
+  chipColors[i].unitWeight = isNaN(n) ? null : n;
+  inputEl.value = chipColors[i].unitWeight !== null ? String(chipColors[i].unitWeight) : '';
+  renderWeightModeInputs();
+}
 function removeChip(i){ chipColors.splice(i,1); renderChipRows(); }
-function addChipRow(){ chipColors.push({name:'', denom:0, refBase64:null, refMime:null, refThumb:null, denomAutoDetected:false, denomDetecting:false}); renderChipRows(); }
+function addChipRow(){ chipColors.push({name:'', denom:0, unitWeight:null, refBase64:null, refMime:null, refThumb:null, denomAutoDetected:false, denomDetecting:false}); renderChipRows(); }
 
 async function onRefFileSelected(i, e){
   const file = e.target.files[0];
@@ -978,8 +999,80 @@ function processCanvasToResult(canvas, maxEdge){
 
 
 // ---- 認識実行 ----
+// ---- 計量モード(Phase 0): 重量から枚数を算出し、画像認識と同じ結果パイプラインに流す ----
+function renderWeightModeInputs(){
+  const container = document.getElementById('weightModeInputs');
+  if(!container) return;
+  if(chipColors.length === 0){
+    container.innerHTML = '<div class="hint">先に色を登録してください。</div>';
+    return;
+  }
+  container.innerHTML = chipColors.map((c, i) => `
+    <div class="row2" style="margin-bottom:8px;">
+      <span style="width:70px; flex:none;">${c.name || '(未設定)'}</span>
+      <input type="text" inputmode="decimal" id="weight-input-${i}" placeholder="総重量(g)"
+             onfocus="selectAllOnFocus(event)"
+             ${!c.unitWeight ? 'disabled' : ''}>
+      <span style="font-size:11px; color:var(--text-dim); flex:none;">${c.unitWeight ? `(1枚${c.unitWeight}g)` : '1枚重量未登録'}</span>
+    </div>
+  `).join('');
+}
+
+function runWeightMode(){
+  const errorBox = document.getElementById('errorBox');
+  errorBox.style.display = 'none';
+  document.getElementById('warningBox').style.display = 'none';
+
+  const names = chipColors.map(c => c.name.trim());
+  if(names.some(n => n === '') || chipColors.some(c => !c.unitWeight)){
+    errorBox.style.display = 'block';
+    errorBox.textContent = '全ての色に、名前と1枚あたり重量(g)を登録してから実行してください。';
+    return;
+  }
+
+  const parsed = [];
+  const warnings = [];
+
+  chipColors.forEach((c, i) => {
+    const input = document.getElementById(`weight-input-${i}`);
+    const totalWeight = parseFloat(input.value);
+    if(!totalWeight || totalWeight <= 0) return; // 未入力の色はスキップ(0枚として扱わない)
+
+    const rawCount = totalWeight / c.unitWeight;
+    const roundedCount = Math.round(rawCount);
+    const diff = Math.abs(rawCount - roundedCount);
+
+    parsed.push({
+      color: c.name,
+      count: roundedCount,
+      count_basis: `総重量${totalWeight}g ÷ 1枚${c.unitWeight}g = ${rawCount.toFixed(2)}枚`,
+      note: `計量モード(整数からのズレ: ${diff.toFixed(2)}枚)`
+    });
+
+    if(diff > 0.15){
+      warnings.push(`「${c.name}」の重量計算結果(${rawCount.toFixed(2)}枚)が整数から大きくズレています。額面違いのチップの混入、風袋(tare)の設定忘れ、1枚重量の校正ズレなどの可能性があります。`);
+    }
+  });
+
+  if(parsed.length === 0){
+    errorBox.style.display = 'block';
+    errorBox.textContent = '少なくとも1色分の総重量を入力してください。';
+    return;
+  }
+
+  window._lastMeasurementMethod = 'weight';
+  window._lastElapsed = '0.0';
+  window._lastUsedRefCount = 0;
+  window._lastWarnings = warnings;
+
+  renderResults(parsed, []);
+  renderWarnings(warnings);
+  document.getElementById('statusText').textContent = '計量モードで計算しました';
+}
+
 async function runRecognition(){
   if(!targetBase64) return;
+  window._lastMeasurementMethod = 'vision';
   const runBtn = document.getElementById('runBtn');
   const spinner = document.getElementById('spinner');
   const statusText = document.getElementById('statusText');
@@ -1405,8 +1498,8 @@ async function scoreTrial(){
         capture_id: capture.capture_id,
         experiment_id: EXPERIMENT_ID,
         ab_group: "A",
-        model_variant: APP_VERSION,
-        model_version: "claude-sonnet-4-6",
+        model_variant: window._lastMeasurementMethod === 'weight' ? 'weight-scale-v1' : APP_VERSION,
+        model_version: window._lastMeasurementMethod === 'weight' ? 'manual-scale-phase0' : 'claude-sonnet-4-6',
         recognition_result: {
           detail: Object.fromEntries(parsed.map(p => [p.color, { count: p.count, unit_value: (chipColors.find(c=>c.name===p.color)?.denom || 0) }])),
           total_count: parsed.reduce((a,p)=>a+p.count,0),
