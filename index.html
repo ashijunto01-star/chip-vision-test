@@ -394,6 +394,10 @@
       <input type="checkbox" id="arTiltCorrectionToggle" style="width:auto;" checked>
       📐 傾き補正を有効にする(過剰補正の疑いがある場合はチェックを外して比較してください)
     </label>
+    <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:13px; color:var(--text-dim);">
+      <input type="checkbox" id="arEmpiricalCorrectionToggle" style="width:auto;" checked>
+      📊 実測データに基づく追加補正を使う(A/Bテストの実測値から角度別に補正)
+    </label>
     <div class="row2" style="margin-bottom:10px;">
       <span style="width:140px; flex:none; font-size:13px;">経験的バイアス補正</span>
       <input type="text" inputmode="numeric" id="ar-bias-correction" placeholder="例: -2" value="-2">
@@ -1183,9 +1187,18 @@ function startLiveAnalysis(){
       const issues = [];
       if(avgLum < 55) issues.push('暗すぎます');
       if(detailScore < 6) issues.push('ピント/距離を確認してください');
+
+      const tiltReadout = document.getElementById('liveTiltReadout');
       if(latestTiltBeta !== null){
         const tiltDeviation = Math.abs(latestTiltBeta - 90);
+        if(tiltReadout){
+          tiltReadout.textContent = `📐 ${tiltDeviation.toFixed(1)}°`;
+          tiltReadout.style.color = tiltDeviation > 15 ? '#f0997b' : (tiltDeviation > 3 ? '#f0c96a' : '#8ee6b8');
+        }
         if(tiltDeviation > 15) issues.push('📐カメラが傾いています(水平に構えてください)');
+      } else if(tiltReadout){
+        tiltReadout.textContent = '📐 センサー未取得';
+        tiltReadout.style.color = '#8b93a1';
       }
 
       const statusEl2 = document.getElementById('cameraLiveStatus');
@@ -2382,6 +2395,31 @@ function getEffectiveThicknessForColor(colorName){
   return { thickness, source: `実測校正(${pts.map(([n])=>n+'枚').join('・')}のデータから算出)` };
 }
 
+// ---- 実測データに基づく角度別の残差補正テーブル(cos補正後もなお残る過大カウント比率、自動スナップなしのA/Bテスト結果より) ----
+const EMPIRICAL_TILT_RATIO_TABLE = [
+  { angle: 12.6, ratio: 1.10 },
+  { angle: 20.6, ratio: 1.15 },
+  { angle: 33.6, ratio: 1.10 },
+  { angle: 34.6, ratio: 1.20 },
+  { angle: 39.2, ratio: 1.00 },
+  { angle: 39.4, ratio: 1.10 },
+  { angle: 49.3, ratio: 1.55 },
+  { angle: 61.1, ratio: 1.65 },
+  { angle: 61.8, ratio: 1.80 }
+];
+function lookupEmpiricalTiltRatio(angle){
+  const t = EMPIRICAL_TILT_RATIO_TABLE;
+  if(angle <= t[0].angle) return t[0].ratio;
+  if(angle >= t[t.length-1].angle) return t[t.length-1].ratio;
+  for(let i = 0; i < t.length - 1; i++){
+    if(angle >= t[i].angle && angle <= t[i+1].angle){
+      const frac = (angle - t[i].angle) / (t[i+1].angle - t[i].angle);
+      return t[i].ratio + frac * (t[i+1].ratio - t[i].ratio);
+    }
+  }
+  return 1;
+}
+
 function recomputeArResult(){
   if(arHeightPoints.length !== 2) return;
   const pxHeight = Math.abs(arHeightPoints[1].videoY - arHeightPoints[0].videoY);
@@ -2391,12 +2429,18 @@ function recomputeArResult(){
   const tiltCorrectionEnabled = document.getElementById('arTiltCorrectionToggle')?.checked;
   const tiltRad = arCaptureTiltDeg * Math.PI / 180;
   const tiltCorrectionFactor = tiltCorrectionEnabled ? Math.max(Math.cos(tiltRad), 0.3) : 1;
-  const heightMm = rawHeightMm / tiltCorrectionFactor;
+  let heightMm = rawHeightMm / tiltCorrectionFactor;
+
+  // ---- 実測データに基づく残差補正(cos補正だけでは吸収しきれない角度依存の過大カウントを追加補正) ----
+  const empiricalCorrectionEnabled = document.getElementById('arEmpiricalCorrectionToggle')?.checked;
+  const empiricalRatio = empiricalCorrectionEnabled ? lookupEmpiricalTiltRatio(arCaptureTiltDeg) : 1;
+  heightMm = heightMm / empiricalRatio;
+
   const tiltNote = !tiltCorrectionEnabled
     ? `検出傾き${arCaptureTiltDeg.toFixed(1)}°(補正無効)`
     : latestTiltBeta === null
     ? '傾きセンサー: 未取得'
-    : `検出傾き${arCaptureTiltDeg.toFixed(1)}°${arCaptureTiltDeg > 3 ? `を補正(×${(1/tiltCorrectionFactor).toFixed(3)})` : '(補正不要)'}`;
+    : `検出傾き${arCaptureTiltDeg.toFixed(1)}°${arCaptureTiltDeg > 3 ? `を補正(×${(1/tiltCorrectionFactor).toFixed(3)})` : '(補正不要)'}${empiricalCorrectionEnabled ? ` + 実測補正(÷${empiricalRatio.toFixed(2)})` : ''}`;
 
   const color = document.getElementById('ar-color-select').value;
   const { thickness: thicknessMm, source } = getEffectiveThicknessForColor(color);
@@ -3372,6 +3416,7 @@ function renderLog(){
   <button class="cancel-btn" onclick="closeCamera()">✕</button>
   <video id="cameraVideo" autoplay playsinline muted></video>
   <div class="camera-guide" id="cameraGuide"></div>
+  <div id="liveTiltReadout" style="position:absolute; top:50px; left:0; right:0; text-align:center; font-family:var(--mono); font-size:20px; font-weight:700; color:#fff; text-shadow:0 1px 4px rgba(0,0,0,0.9); pointer-events:none;"></div>
   <div class="camera-live-status" id="cameraLiveStatus"></div>
   <div class="camera-controls">
     <button class="shutter-btn" onclick="triggerCapture()"></button>
