@@ -275,6 +275,8 @@
     <span style="width:90px; flex:none; font-size:13px;">縁の斑点間隔(mm)</span>
     <input type="text" inputmode="decimal" id="global-spot-spacing" placeholder="例: 3.0(任意・白斑点がある場合)">
   </div>
+  <button class="cap-btn secondary" style="margin-bottom:8px;" onclick="enableTiltSensorManually()">📐 傾きセンサーを事前に有効化(推奨・撮影前に1回)</button>
+  <div class="status" id="tiltSensorStatus" style="margin-bottom:10px;">状態: 未確認</div>
   <button class="cap-btn" style="background:var(--purple, #7f77dd);" onclick="startAutoModeCapture()">📷 チップの列を撮影</button>
   <div id="autoModeResultArea" style="display:none; margin-top:14px;">
     <div class="hint" style="margin-bottom:8px;" id="autoModeInstruction">スタックの左上の角をタップしてください。</div>
@@ -1064,12 +1066,30 @@ async function ensureTiltSensor(){
   try{
     if(typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
       const perm = await DeviceOrientationEvent.requestPermission();
-      if(perm !== 'granted') return;
+      if(perm !== 'granted'){
+        updateTiltSensorStatus('許可されませんでした');
+        return;
+      }
     }
     window.addEventListener('deviceorientation', (e) => {
       latestTiltBeta = e.beta; // 前後方向の傾き(縦持ちで垂直=90°付近が水平構え)
+      updateTiltSensorStatus(`有効(beta=${e.beta !== null ? e.beta.toFixed(1) : '?'}°)`);
     });
-  }catch(e){ /* センサー非対応・拒否時は傾き警告なしにフォールバック */ }
+    setTimeout(() => {
+      if(latestTiltBeta === null) updateTiltSensorStatus('反応なし(この端末では非対応の可能性)');
+    }, 1500);
+  }catch(e){
+    updateTiltSensorStatus('エラー: ' + e.message);
+  }
+}
+function updateTiltSensorStatus(text){
+  const el = document.getElementById('tiltSensorStatus');
+  if(el) el.textContent = '状態: ' + text;
+}
+function enableTiltSensorManually(){
+  tiltPermissionRequested = false; // 再試行を許可
+  updateTiltSensorStatus('確認中...');
+  ensureTiltSensor();
 }
 
 function startLiveAnalysis(){
@@ -1695,9 +1715,9 @@ function onAutoModeTap(e){
   const tiltRad = autoModeCaptureTiltDeg * Math.PI / 180;
   const tiltCorrectionFactor = Math.max(Math.cos(tiltRad), 0.3); // 極端な角度での発散を防ぐ下限
   const heightMm = rawHeightMm / tiltCorrectionFactor;
-  const tiltNote = autoModeCaptureTiltDeg > 3
-    ? `、傾き${autoModeCaptureTiltDeg.toFixed(1)}°を補正(×${(1/tiltCorrectionFactor).toFixed(3)})`
-    : '';
+  const tiltNote = latestTiltBeta === null
+    ? '、傾きセンサー: 未取得(未対応またはアクセス未許可)'
+    : `、検出傾き${autoModeCaptureTiltDeg.toFixed(1)}°(生値beta=${latestTiltBeta.toFixed(1)}°)${autoModeCaptureTiltDeg > 3 ? `を補正(×${(1/tiltCorrectionFactor).toFixed(3)})` : '(補正不要)'}`;
 
   const { thickness: thicknessMm, source } = getEffectiveThicknessForColor(matched.color);
   const rawCount = heightMm / thicknessMm;
