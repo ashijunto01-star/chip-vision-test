@@ -1577,21 +1577,35 @@ function detectWhiteSpotsInBox(ctx, left, top, right, bottom){
     return avg > 195 && spread < 35;
   };
 
-  const centers = [];
+  const blobs = []; // { start, end, center, lengthPx }
   let inBlob = false, blobStart = 0;
   for(let y = Math.round(top); y <= Math.round(bottom); y++){
     const bright = isBrightRow(y);
     if(bright && !inBlob){ inBlob = true; blobStart = y; }
-    if(!bright && inBlob){ inBlob = false; centers.push((blobStart + y - 1) / 2); }
+    if(!bright && inBlob){
+      inBlob = false;
+      blobs.push({ start: blobStart, end: y-1, center: (blobStart + y - 1) / 2, lengthPx: (y - 1 - blobStart) });
+    }
   }
-  if(inBlob) centers.push((blobStart + Math.round(bottom)) / 2);
+  if(inBlob){
+    blobs.push({ start: blobStart, end: Math.round(bottom), center: (blobStart + Math.round(bottom)) / 2, lengthPx: (Math.round(bottom) - blobStart) });
+  }
 
-  if(centers.length < 2) return { count: centers.length, avgGapPx: null };
+  if(blobs.length < 2) return { count: blobs.length, avgGapPx: null, blobs, mergedEstimate: null };
 
   const gaps = [];
-  for(let i = 1; i < centers.length; i++) gaps.push(centers[i] - centers[i-1]);
+  for(let i = 1; i < blobs.length; i++) gaps.push(blobs[i].center - blobs[i-1].center);
   const avgGapPx = gaps.reduce((a,b)=>a+b,0) / gaps.length;
-  return { count: centers.length, avgGapPx };
+
+  // ---- 規定より長い塊(斑点の重なり)から、合成された個数を推定 ----
+  // 通常サイズの塊(中央値に近いもの)を「1個分の長さ」の基準とし、それより明らかに長い塊があれば複数個分とみなす
+  const sortedLengths = blobs.map(b => b.lengthPx).sort((a,b) => a-b);
+  const medianLength = sortedLengths[Math.floor(sortedLengths.length / 2)];
+  const mergedBlobs = blobs
+    .filter(b => b.lengthPx > medianLength * 1.6) // 中央値の1.6倍を超える塊は「合成」とみなす
+    .map(b => ({ ...b, estimatedMergeCount: Math.round(b.lengthPx / medianLength) }));
+
+  return { count: blobs.length, avgGapPx, blobs, medianLength, mergedBlobs };
 }
 
 function findNearestRegisteredColorInBox(ctx, left, top, right, bottom){
@@ -1761,6 +1775,9 @@ function onAutoModeTap(e){
       const diff = Math.abs(spotRawCount - rawCount);
 
       basisText += ` / 斑点較正: ${spots.count}個検出・平均間隔${spots.avgGapPx.toFixed(1)}px→${spotPxPerMm.toFixed(2)}px/mm→${spotRawCount.toFixed(2)}枚`;
+      if(spots.mergedBlobs && spots.mergedBlobs.length > 0){
+        basisText += ` / 斑点重なり検出: ${spots.mergedBlobs.length}箇所で規定より長い塊(推定合成数: ${spots.mergedBlobs.map(b=>b.estimatedMergeCount).join(',')})`;
+      }
       if(diff > 1){
         basisText += `(⚠幅ベースとの差が${diff.toFixed(1)}枚あります。要確認)`;
       } else {
