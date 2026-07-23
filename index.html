@@ -325,6 +325,37 @@
 </section>
 
 <section>
+  <h2>📐 実験: マーカー較正(4点透視補正・高精度)</h2>
+  <div class="hint" style="margin-bottom:10px;">
+    正式な精算には使わないでください(検証専用)。<b>実寸が分かっている長方形の紙(名刺・印刷用紙など)を、チップの列と同じ卓上に一緒に撮影</b>してください。4隅をタップすることで、画面内の位置ごとの正確な倍率(ホモグラフィ変換)を求め、角度・傾きによる歪みをその場で補正します。
+  </div>
+  <div class="row2" style="margin-bottom:8px;">
+    <span style="width:90px; flex:none; font-size:13px;">マーカー幅(mm)</span>
+    <input type="text" inputmode="decimal" id="marker-width" placeholder="例: 91(名刺の横)">
+  </div>
+  <div class="row2" style="margin-bottom:10px;">
+    <span style="width:90px; flex:none; font-size:13px;">マーカー高さ(mm)</span>
+    <input type="text" inputmode="decimal" id="marker-height" placeholder="例: 55(名刺の縦)">
+  </div>
+  <button class="cap-btn" style="background:var(--purple, #7f77dd);" onclick="startMarkerCapture()">📷 マーカー+スタックを撮影</button>
+  <div id="markerResultArea" style="display:none; margin-top:14px;">
+    <div class="hint" style="margin-bottom:8px;" id="markerInstruction">マーカーの左上の角をタップしてください。</div>
+    <div id="markerScrollBox" style="max-width:100%; max-height:420px; overflow:auto; border:1px solid var(--panel-line); border-radius:8px;">
+      <div style="position:relative; display:inline-block;">
+        <img id="markerImage" style="display:block; border-radius:8px;">
+        <svg id="markerOverlay" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></svg>
+      </div>
+    </div>
+    <div id="markerResult" style="margin-top:10px; font-family:var(--mono); font-size:13px;"></div>
+    <div class="row2" style="margin-top:10px;">
+      <span style="width:90px; flex:none; font-size:13px;">対象の色</span>
+      <select id="marker-color-select" style="flex:1;"></select>
+    </div>
+    <button class="run-btn" style="margin-top:10px;" onclick="adoptMarkerResult()">この結果を採用</button>
+  </div>
+</section>
+
+<section>
   <h2>🧪 実験: 側面高さ計測(写真内スケール較正 v3)</h2>
   <div class="hint" style="margin-bottom:10px;">
     正式な精算には使わないでください(検証専用)。<b>基準チップ1枚をコインのように立てて、スタックのすぐ隣に同じ距離感で置いてください。</b>寝かせて直径で較正する方式(v2)は、カメラの角度によって高さ方向とは異なる歪みを受けるため、測りたい軸(高さ)と同じ軸(厚み)で較正するこの方式の方が正確です。
@@ -1967,6 +1998,195 @@ function applyThicknessCalibToColor(){
   alert(`「${colorName}」の${count}枚高さ校正欄に ${thicknessCalibComputed.heightMm.toFixed(2)}mm を反映しました。`);
 }
 
+// ---- マーカー較正: 4点のホモグラフィ変換による透視補正 ----
+
+// 8x8連立方程式をガウスの消去法(部分ピボット選択)で解く
+function solveLinear8(A, b){
+  const n = 8;
+  const M = A.map((row, i) => [...row, b[i]]);
+  for(let col = 0; col < n; col++){
+    let maxRow = col;
+    for(let r = col + 1; r < n; r++){
+      if(Math.abs(M[r][col]) > Math.abs(M[maxRow][col])) maxRow = r;
+    }
+    [M[col], M[maxRow]] = [M[maxRow], M[col]];
+    const pivot = M[col][col];
+    if(Math.abs(pivot) < 1e-9) continue;
+    for(let r = 0; r < n; r++){
+      if(r === col) continue;
+      const factor = M[r][col] / pivot;
+      for(let c = col; c <= n; c++) M[r][c] -= factor * M[col][c];
+    }
+  }
+  return M.map((row, i) => row[n] / (row[i] || 1e-9));
+}
+
+// 画像座標(4点)→ 実寸mm平面座標(4点)へのホモグラフィ行列を求める(DLT法)
+function computeHomography(srcPoints, dstPoints){
+  const A = [], b = [];
+  for(let i = 0; i < 4; i++){
+    const { x, y } = srcPoints[i];
+    const { x: X, y: Y } = dstPoints[i];
+    A.push([x, y, 1, 0, 0, 0, -X*x, -X*y]); b.push(X);
+    A.push([0, 0, 0, x, y, 1, -Y*x, -Y*y]); b.push(Y);
+  }
+  const h = solveLinear8(A, b);
+  return [...h, 1]; // h11..h32, h33=1
+}
+
+function applyHomography(H, x, y){
+  const [h11,h12,h13,h21,h22,h23,h31,h32,h33] = H;
+  const w = h31*x + h32*y + h33;
+  return { x: (h11*x + h12*y + h13) / w, y: (h21*x + h22*y + h23) / w };
+}
+
+// 画面内の特定の位置(x,y)における、縦方向のローカルなmm/px比率を求める(局所ヤコビアン近似)
+function localVerticalMmPerPx(H, x, y){
+  const eps = 2;
+  const p0 = applyHomography(H, x, y);
+  const p1 = applyHomography(H, x, y + eps);
+  return Math.hypot(p1.x - p0.x, p1.y - p0.y) / eps;
+}
+
+let markerStage = 'corners'; // 'corners' | 'height'
+let markerCorners = [];
+let markerHeightPoints = [];
+let markerH = null;
+let markerCtx = null;
+let markerCaptureTiltDeg = 0;
+
+function startMarkerCapture(){
+  const w = parseFloat(document.getElementById('marker-width').value);
+  const h = parseFloat(document.getElementById('marker-height').value);
+  if(!w || w <= 0 || !h || h <= 0){
+    const errorBox = document.getElementById('errorBox');
+    errorBox.style.display = 'block';
+    errorBox.textContent = 'マーカーの幅・高さ(mm)を先に入力してください。';
+    return;
+  }
+  markerStage = 'corners';
+  markerCorners = [];
+  markerHeightPoints = [];
+  markerH = null;
+  openCamera(onMarkerCaptured, 1920, 'マーカー(実寸既知の紙)とスタックを同じ卓上に並べて撮影してください');
+}
+
+function onMarkerCaptured(result){
+  markerCaptureTiltDeg = latestTiltBeta !== null ? Math.abs(latestTiltBeta - 90) : 0;
+  const img = document.getElementById('markerImage');
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    markerCtx = canvas.getContext('2d', { willReadFrequently: true });
+    markerCtx.drawImage(img, 0, 0);
+  };
+  img.src = result.dataUrl;
+  document.getElementById('markerResultArea').style.display = 'block';
+  document.getElementById('markerOverlay').innerHTML = '';
+  document.getElementById('markerResult').textContent = '';
+  document.getElementById('markerInstruction').textContent = 'マーカーの左上の角をタップしてください。';
+  markerStage = 'corners';
+  markerCorners = [];
+  markerHeightPoints = [];
+  markerH = null;
+
+  const select = document.getElementById('marker-color-select');
+  select.innerHTML = chipColors.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+
+  img.onclick = onMarkerTap;
+}
+
+const MARKER_CORNER_LABELS = ['左上', '右上', '右下', '左下'];
+
+function onMarkerTap(e){
+  const img = document.getElementById('markerImage');
+  const rect = img.getBoundingClientRect();
+  const scaleX = img.naturalWidth / rect.width;
+  const scaleY = img.naturalHeight / rect.height;
+  const rawX = (e.clientX - rect.left) * scaleX;
+  const rawY = (e.clientY - rect.top) * scaleY;
+  const snapped = markerCtx ? refineCornerToEdge(markerCtx, rawX, rawY, img.naturalWidth, img.naturalHeight) : { x: rawX, y: rawY };
+
+  const overlay = document.getElementById('markerOverlay');
+  const sx = img.clientWidth / img.naturalWidth, sy = img.clientHeight / img.naturalHeight;
+
+  if(markerStage === 'corners'){
+    markerCorners.push(snapped);
+    overlay.innerHTML += `<circle cx="${snapped.x*sx}" cy="${snapped.y*sy}" r="6" fill="var(--felt-bright)" stroke="#fff" stroke-width="2"/>`;
+
+    if(markerCorners.length < 4){
+      document.getElementById('markerInstruction').textContent = `マーカーの${MARKER_CORNER_LABELS[markerCorners.length]}の角をタップしてください。`;
+      return;
+    }
+
+    // 4隅が揃ったのでホモグラフィを計算
+    const w = parseFloat(document.getElementById('marker-width').value);
+    const h = parseFloat(document.getElementById('marker-height').value);
+    const dstPoints = [{x:0,y:0}, {x:w,y:0}, {x:w,y:h}, {x:0,y:h}];
+    markerH = computeHomography(markerCorners, dstPoints);
+
+    // 閉じた四角形を描画
+    const pts = markerCorners.map(p => `${p.x*sx},${p.y*sy}`).join(' ');
+    overlay.innerHTML += `<polygon points="${pts}" fill="none" stroke="var(--felt-bright)" stroke-width="2"/>`;
+
+    markerStage = 'height';
+    document.getElementById('markerInstruction').textContent = 'マーカーの較正完了。スタックの一番上のチップの上端外側の縁→一番下のチップの底面外側の縁をタップしてください。';
+    return;
+  }
+
+  if(markerStage === 'height'){
+    markerHeightPoints.push(snapped);
+    overlay.innerHTML += `<circle cx="${snapped.x*sx}" cy="${snapped.y*sy}" r="6" fill="var(--gold)" stroke="#fff" stroke-width="2"/>`;
+
+    if(markerHeightPoints.length < 2){
+      document.getElementById('markerInstruction').textContent = 'スタックの一番下のチップの底面外側の縁をタップしてください。';
+      return;
+    }
+
+    const [p1, p2] = markerHeightPoints;
+    const pxHeight = Math.abs(p2.y - p1.y);
+    const midX = (p1.x + p2.x) / 2, midY = (p1.y + p2.y) / 2;
+    const localMmPerPx = localVerticalMmPerPx(markerH, midX, midY);
+    const heightMm = pxHeight * localMmPerPx;
+
+    const color = document.getElementById('marker-color-select').value;
+    const { thickness: thicknessMm, source } = getEffectiveThicknessForColor(color);
+    const rawCount = heightMm / thicknessMm;
+    const roundedCount = Math.round(rawCount);
+
+    window._markerLastCalc = { heightMm, thicknessMm, rawCount, roundedCount, color };
+    document.getElementById('markerResult').innerHTML =
+      `ローカル倍率(スタック位置での実測): ${(1/localMmPerPx).toFixed(2)}px/mm<br>` +
+      `タップ間の高さ: ${pxHeight.toFixed(1)}px → ${heightMm.toFixed(2)}mm<br>` +
+      `使用する1枚厚み: ${thicknessMm.toFixed(4)}mm(${source})<br>` +
+      `${heightMm.toFixed(2)}mm ÷ ${thicknessMm.toFixed(4)}mm = <b>${rawCount.toFixed(2)}枚</b> → 採用値: ${roundedCount}枚`;
+    document.getElementById('markerInstruction').textContent = '計測完了。「この結果を採用」で反映するか、別のスタックを続けて測れます(タップし直すとリセットされます)。';
+  }
+}
+
+function adoptMarkerResult(){
+  if(!window._markerLastCalc){
+    alert('先にマーカー4隅とスタックの高さをタップしてください。');
+    return;
+  }
+  const calc = window._markerLastCalc;
+  const parsed = [{
+    color: calc.color,
+    count: calc.roundedCount,
+    count_basis: `マーカー較正(4点透視補正): ${calc.heightMm.toFixed(2)}mm ÷ ${calc.thicknessMm.toFixed(3)}mm = ${calc.rawCount.toFixed(2)}枚`,
+    note: 'マーカー較正モード(実験)'
+  }];
+
+  window._lastMeasurementMethod = 'marker-homography';
+  window._lastElapsed = '0.0';
+  window._lastUsedRefCount = 0;
+  window._lastWarnings = [];
+
+  renderResults(parsed, []);
+  renderWarnings([]);
+}
+
 // ---- 色ごとの実測校正(5枚/10枚の高さ)から、有効な1枚厚みを算出 ----
 function getEffectiveThicknessForColor(colorName){
   const c = chipColors.find(x => x.name === colorName);
@@ -2611,10 +2831,12 @@ async function scoreTrial(){
         model_variant: window._lastMeasurementMethod === 'weight' ? 'weight-scale-v1'
                       : window._lastMeasurementMethod === 'side-height-ar' ? 'side-height-ar-v1'
                       : window._lastMeasurementMethod === 'auto-geometric' ? 'auto-geometric-v1'
+                      : window._lastMeasurementMethod === 'marker-homography' ? 'marker-homography-v1'
                       : APP_VERSION,
         model_version: window._lastMeasurementMethod === 'weight' ? 'manual-scale-phase0'
                       : window._lastMeasurementMethod === 'side-height-ar' ? 'manual-tap-calibration'
                       : window._lastMeasurementMethod === 'auto-geometric' ? 'zero-calibration-auto'
+                      : window._lastMeasurementMethod === 'marker-homography' ? '4pt-perspective-correction'
                       : 'claude-sonnet-4-6',
         recognition_result: {
           detail: Object.fromEntries(parsed.map(p => [p.color, { count: p.count, unit_value: (chipColors.find(c=>c.name===p.color)?.denom || 0), confidence: (typeof p.confidence === 'number' ? p.confidence : null) }])),
