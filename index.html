@@ -611,6 +611,13 @@ function renderChipRows(){
                  onblur="updateChipUnitWeight(${i}, this.value, this)">
           <span class="yen-prefix" style="font-size:11px;">g</span>
         </div>
+        <div class="row2">
+          <span class="yen-prefix" style="font-size:11px;">許容誤差</span>
+          <input type="text" inputmode="decimal" value="${c.tolerance !== undefined && c.tolerance !== null ? c.tolerance : ''}" placeholder="デフォルト0.15枚"
+                 onfocus="selectAllOnFocus(event)"
+                 onblur="updateChipTolerance(${i}, this.value, this)">
+          <span class="yen-prefix" style="font-size:11px;">枚</span>
+        </div>
         ${c.pendingDenom !== undefined ? `
           <div style="background:var(--panel); border:1px solid var(--gold); border-radius:8px; padding:8px 10px; margin-top:6px; font-size:12px;">
             画像内に「${c.pendingVisibleText}」という印字を検出しました。額面を¥${formatNum(c.pendingDenom)}に設定しますか?
@@ -653,8 +660,13 @@ function updateChipUnitWeight(i, val, inputEl){
   inputEl.value = chipColors[i].unitWeight !== null ? String(chipColors[i].unitWeight) : '';
   renderWeightModeInputs();
 }
+function updateChipTolerance(i, val, inputEl){
+  const n = parseFloat(String(val).replace(/[^0-9.]/g, ''));
+  chipColors[i].tolerance = isNaN(n) ? null : n;
+  inputEl.value = chipColors[i].tolerance !== null ? String(chipColors[i].tolerance) : '';
+}
 function removeChip(i){ chipColors.splice(i,1); renderChipRows(); }
-function addChipRow(){ chipColors.push({name:'', denom:0, unitWeight:null, refBase64:null, refMime:null, refThumb:null, denomAutoDetected:false, denomDetecting:false}); renderChipRows(); }
+function addChipRow(){ chipColors.push({name:'', denom:0, unitWeight:null, tolerance:null, refBase64:null, refMime:null, refThumb:null, denomAutoDetected:false, denomDetecting:false}); renderChipRows(); }
 
 async function onRefFileSelected(i, e){
   const file = e.target.files[0];
@@ -1041,16 +1053,17 @@ function runWeightMode(){
     const rawCount = totalWeight / c.unitWeight;
     const roundedCount = Math.round(rawCount);
     const diff = Math.abs(rawCount - roundedCount);
+    const tolerance = (c.tolerance !== undefined && c.tolerance !== null) ? c.tolerance : 0.15;
 
     parsed.push({
       color: c.name,
       count: roundedCount,
-      count_basis: `総重量${totalWeight}g ÷ 1枚${c.unitWeight}g = ${rawCount.toFixed(2)}枚`,
+      count_basis: `総重量${totalWeight}g ÷ 1枚${c.unitWeight}g = ${rawCount.toFixed(2)}枚(許容誤差±${tolerance}枚)`,
       note: `計量モード(整数からのズレ: ${diff.toFixed(2)}枚)`
     });
 
-    if(diff > 0.15){
-      warnings.push(`「${c.name}」の重量計算結果(${rawCount.toFixed(2)}枚)が整数から大きくズレています。額面違いのチップの混入、風袋(tare)の設定忘れ、1枚重量の校正ズレなどの可能性があります。`);
+    if(diff > tolerance){
+      warnings.push(`「${c.name}」の重量計算結果(${rawCount.toFixed(2)}枚)が許容誤差(±${tolerance}枚)を超えてズレています。額面違いのチップの混入、風袋(tare)の設定忘れ、1枚重量の校正ズレ、ロット差などの可能性があります。`);
     }
   });
 
