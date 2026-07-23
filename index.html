@@ -230,6 +230,11 @@
     <input type="checkbox" id="darkModeToggle" checked style="width:auto;">
     暗所補正を有効にする(暗い写真のみ自動でコントラスト補正)
   </label>
+  <div style="display:flex; gap:8px; margin-top:14px;">
+    <button class="cap-btn secondary" style="margin:0; flex:1;" onclick="saveChipProfileToServer()">💾 この設定を共有保存(ホスト用)</button>
+    <button class="cap-btn secondary" style="margin:0; flex:1;" onclick="loadChipProfileFromServer(true)">🔄 共有設定を読み込む</button>
+  </div>
+  <div class="status" id="chipProfileStatus" style="margin-top:8px;"></div>
 </section>
 
 <section>
@@ -259,13 +264,14 @@
     正式な精算には使わないでください(検証専用)。<b>基準チップ1枚をコインのように立てて、スタックのすぐ隣に同じ距離感で置いてください。</b>寝かせて直径で較正する方式(v2)は、カメラの角度によって高さ方向とは異なる歪みを受けるため、測りたい軸(高さ)と同じ軸(厚み)で較正するこの方式の方が正確です。
   </div>
   <div class="row2" style="margin-bottom:8px;">
-    <span style="width:90px; flex:none; font-size:13px;">直径(mm・参考)</span>
-    <input type="text" inputmode="decimal" id="ar-diameter" placeholder="現在この機能では未使用">
+    <span style="width:90px; flex:none; font-size:13px;">較正用枚数</span>
+    <input type="text" inputmode="numeric" id="ar-calib-count" placeholder="例: 5" value="5">
   </div>
   <div class="row2" style="margin-bottom:10px;">
     <span style="width:90px; flex:none; font-size:13px;">厚み(mm)</span>
     <input type="text" inputmode="decimal" id="ar-thickness" placeholder="例: 3.3">
   </div>
+  <div class="hint" style="margin-bottom:10px;">基準チップは1枚ではなく、上記の枚数分を重ねて立てた状態で撮影してください(区間が長くなり、タップのズレの影響を受けにくくなります)。</div>
   <button class="cap-btn" style="background:var(--purple, #7f77dd);" onclick="startArExperimentV2()">📷 基準チップ+スタックを一緒に撮影</button>
   <div id="arResultArea" style="display:none; margin-top:14px;">
     <div class="row2" style="margin-bottom:8px;">
@@ -276,7 +282,7 @@
       <input type="checkbox" id="arAutoDetectToggle" style="width:auto;">
       🤖 高さの自動検出(スタックの中央付近を1回タップするだけで、その色が続く上端・下端を自動でスキャン)
     </label>
-    <div class="hint" style="margin-bottom:8px;" id="arTapInstruction">① 立てた基準チップの厚み方向の両端(上端→下端)を2回タップしてください。</div>
+    <div class="hint" style="margin-bottom:8px;" id="arTapInstruction">① 立てた基準チップの束(一番上のチップの上端外側の縁→一番下のチップの底面外側の縁)を2回タップしてください。</div>
     <div style="display:flex; gap:8px; margin-bottom:8px;">
       <button class="cap-btn secondary" style="margin:0; flex:1; padding:8px;" onclick="cycleArZoom()">🔍 拡大(<span id="arZoomLabel">x1</span>)</button>
       <button class="cap-btn secondary" style="margin:0; flex:1; padding:8px;" onclick="redoArReference()">🔄 ①からやり直し</button>
@@ -538,6 +544,7 @@ function loadEndpoint(){
 }
 loadEndpoint();
 loadTrialsFromServer();
+loadChipProfileFromServer(false);
 
 // ---- 数値フォーマット系(3桁区切り + 0クリア済み入力) ----
 function formatNum(n){
@@ -1100,7 +1107,7 @@ function onArV2Captured(result){
   document.getElementById('arResultArea').style.display = 'block';
   document.getElementById('arCalcResult').textContent = '';
   document.getElementById('arTapOverlay').innerHTML = '';
-  document.getElementById('arTapInstruction').textContent = '① 立てた基準チップの厚み方向の両端(上端→下端)を2回タップしてください。';
+  document.getElementById('arTapInstruction').textContent = '① 立てた基準チップの束(一番上のチップの上端外側の縁→一番下のチップの底面外側の縁)を2回タップしてください。';
 
   const select = document.getElementById('ar-color-select');
   select.innerHTML = chipColors.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
@@ -1108,10 +1115,34 @@ function onArV2Captured(result){
   img.onclick = onArImageTap;
 }
 
-// ---- 拡大表示 ----
+// ---- 拡大表示(タップ/ピンチした地点を中心に拡大縮小) ----
+function zoomImageAround(newWidth, viewportX, viewportY){
+  const box = document.getElementById('arImageScrollBox');
+  const img = document.getElementById('arCapturedImage');
+  const oldWidth = img.clientWidth;
+  const oldScrollLeft = box.scrollLeft;
+  const oldScrollTop = box.scrollTop;
+  const scale = newWidth / oldWidth;
+
+  img.style.width = newWidth + 'px';
+  arZoomLevel = newWidth / box.clientWidth;
+
+  box.scrollLeft = (oldScrollLeft + viewportX) * scale - viewportX;
+  box.scrollTop = (oldScrollTop + viewportY) * scale - viewportY;
+
+  document.getElementById('arZoomLabel').textContent = `x${arZoomLevel.toFixed(1)}`;
+  redrawArOverlay();
+}
+
 function cycleArZoom(){
-  arZoomLevel = arZoomLevel >= 3 ? 1 : arZoomLevel + 1;
-  applyArZoom();
+  const box = document.getElementById('arImageScrollBox');
+  const rect = box.getBoundingClientRect();
+  // 直近のタップ位置があればそこを中心に、なければビューポート中央を基準にする
+  const anchor = window._arLastViewportPoint || { x: rect.width/2, y: rect.height/2 };
+
+  const newLevel = arZoomLevel >= 3 ? 1 : arZoomLevel + 1;
+  const newWidth = box.clientWidth * newLevel;
+  zoomImageAround(newWidth, anchor.x, anchor.y);
 }
 function applyArZoom(){
   const scrollBox = document.getElementById('arImageScrollBox');
@@ -1123,7 +1154,7 @@ function applyArZoom(){
   redrawArOverlay();
 }
 
-// ---- 2本指ピンチズーム ----
+// ---- 2本指ピンチズーム(2本指の中点を基準に拡大縮小) ----
 let arPinchState = null;
 function setupArPinchZoom(){
   const box = document.getElementById('arImageScrollBox');
@@ -1131,11 +1162,15 @@ function setupArPinchZoom(){
 
   box.addEventListener('touchstart', (e) => {
     if(e.touches.length === 2){
+      const rect = box.getBoundingClientRect();
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+      const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
       arPinchState = {
         startDist: Math.hypot(dx, dy),
-        startWidth: document.getElementById('arCapturedImage').clientWidth
+        startWidth: document.getElementById('arCapturedImage').clientWidth,
+        midX, midY
       };
     }
   }, { passive: true });
@@ -1150,12 +1185,7 @@ function setupArPinchZoom(){
       const boxWidth = box.clientWidth;
       let newWidth = arPinchState.startWidth * scale;
       newWidth = Math.max(boxWidth * 0.5, Math.min(boxWidth * 6, newWidth));
-
-      const img = document.getElementById('arCapturedImage');
-      img.style.width = newWidth + 'px';
-      arZoomLevel = newWidth / boxWidth;
-      document.getElementById('arZoomLabel').textContent = `x${arZoomLevel.toFixed(1)}`;
-      redrawArOverlay();
+      zoomImageAround(newWidth, arPinchState.midX, arPinchState.midY);
     }
   }, { passive: false });
 
@@ -1173,7 +1203,7 @@ function redoArReference(){
   arPxPerMm = null;
   window._arLastCalc = null;
   document.getElementById('arCalcResult').textContent = '';
-  document.getElementById('arTapInstruction').textContent = '① 立てた基準チップの厚み方向の両端(上端→下端)を2回タップしてください。';
+  document.getElementById('arTapInstruction').textContent = '① 立てた基準チップの束(一番上のチップの上端外側の縁→一番下のチップの底面外側の縁)を2回タップしてください。';
   redrawArOverlay();
 }
 function redoArHeight(){
@@ -1185,7 +1215,7 @@ function redoArHeight(){
   arHeightPoints = [];
   window._arLastCalc = null;
   document.getElementById('arCalcResult').textContent = '';
-  document.getElementById('arTapInstruction').textContent = `② 較正済み(${arPxPerMm.toFixed(2)}px/mm)。スタックの上端→下端の順に2回タップしてください。`;
+  document.getElementById('arTapInstruction').textContent = `② 較正済み(${arPxPerMm.toFixed(2)}px/mm)。スタックの一番上のチップの上端外側の縁→一番下のチップの底面外側の縁の順に2回タップしてください。`;
   redrawArOverlay();
 }
 
@@ -1198,6 +1228,9 @@ function onArImageTap(e){
   const scaleY = img.naturalHeight / rect.height;
   const point = { videoX: cssX * scaleX, videoY: cssY * scaleY, cssX, cssY };
 
+  const boxRect = document.getElementById('arImageScrollBox').getBoundingClientRect();
+  window._arLastViewportPoint = { x: e.clientX - boxRect.left, y: e.clientY - boxRect.top };
+
   if(arTapStage === 'reference'){
     arRefPoints.push(point);
     if(arRefPoints.length > 2) arRefPoints.shift();
@@ -1206,9 +1239,10 @@ function onArImageTap(e){
     if(arRefPoints.length === 2){
       const pxDist = Math.hypot(arRefPoints[1].videoX - arRefPoints[0].videoX, arRefPoints[1].videoY - arRefPoints[0].videoY);
       const thicknessMm = parseFloat(document.getElementById('ar-thickness').value);
-      arPxPerMm = pxDist / thicknessMm;
+      const calibCount = parseFloat(document.getElementById('ar-calib-count').value) || 1;
+      arPxPerMm = pxDist / (thicknessMm * calibCount);
       arTapStage = 'height';
-      document.getElementById('arTapInstruction').textContent = `② 較正完了(${arPxPerMm.toFixed(2)}px/mm)。次にスタックの上端→下端の順に2回タップしてください。`;
+      document.getElementById('arTapInstruction').textContent = `② 較正完了(${arPxPerMm.toFixed(2)}px/mm、基準${calibCount}枚分から算出)。次にスタックの一番上のチップの上端外側の縁→一番下のチップの底面外側の縁の順に2回タップしてください。`;
     }
     return;
   }
@@ -1988,6 +2022,42 @@ async function callDb(reqType, payload){
   const data = await response.json();
   if(data.error) throw new Error(data.error);
   return data;
+}
+
+// ---- チップ設定(色・額面・厚み等)の共有保存・読込 ----
+async function saveChipProfileToServer(){
+  const statusEl = document.getElementById('chipProfileStatus');
+  statusEl.textContent = '保存中...';
+  try{
+    await callDb("save_chip_profile", { chip_colors: chipColors });
+    statusEl.innerHTML = `<span style="color:var(--felt-bright)">✓ 共有保存しました(${new Date().toLocaleTimeString('ja-JP')})。他の端末はこれを自動的に読み込みます。</span>`;
+  }catch(err){
+    statusEl.innerHTML = `<span style="color:var(--danger)">✕ 保存失敗: ${err.message}</span>`;
+  }
+}
+async function loadChipProfileFromServer(manualTrigger){
+  const statusEl = document.getElementById('chipProfileStatus');
+  const endpoint = document.getElementById('endpointInput').value.trim();
+  if(!endpoint){
+    if(manualTrigger) alert('先にEdge Function URLを設定してください。');
+    return;
+  }
+  try{
+    const data = await callDb("load_chip_profile", {});
+    if(!data.profile){
+      if(manualTrigger) statusEl.textContent = '共有設定はまだ保存されていません。';
+      return;
+    }
+    if(!manualTrigger && chipColors.length > 0){
+      // 自動読み込み時、既に手元で編集中のデータがあれば上書きしない(誤って作業内容を消さないため)
+      return;
+    }
+    chipColors = data.profile.chip_colors || [];
+    renderChipRows();
+    statusEl.innerHTML = `<span style="color:var(--felt-bright)">✓ 共有設定を読み込みました(最終更新: ${new Date(data.profile.updated_at).toLocaleString('ja-JP')})</span>`;
+  }catch(err){
+    if(manualTrigger) statusEl.innerHTML = `<span style="color:var(--danger)">✕ 読込失敗: ${err.message}</span>`;
+  }
 }
 async function loadTrialsFromServer(){
   try{
