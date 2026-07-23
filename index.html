@@ -394,6 +394,11 @@
       <input type="checkbox" id="arTiltCorrectionToggle" style="width:auto;" checked>
       📐 傾き補正を有効にする(過剰補正の疑いがある場合はチェックを外して比較してください)
     </label>
+    <div class="row2" style="margin-bottom:10px;">
+      <span style="width:140px; flex:none; font-size:13px;">経験的バイアス補正</span>
+      <input type="text" inputmode="numeric" id="ar-bias-correction" placeholder="例: -2" value="-2">
+      <span style="font-size:11px; color:var(--text-dim); flex:none;">枚(最終結果から差し引く)</span>
+    </div>
     <div class="hint" style="margin-bottom:8px;" id="arTapInstruction">① 立てた基準チップの束の側面「内側」(輪郭がぼやけた縁ではなく、面がはっきり見える部分)を2回タップしてください。</div>
     <div class="hint" style="margin-bottom:8px; color:var(--gold);">💡コツ: 基準チップは縁のボケた輪郭を避け側面の内側をタップ。スタックの高さは一番上のチップの「上辺」→一番下のチップの「下辺」を、外枠に沿ってタップすると精度が上がります。</div>
     <div id="arCalibDataList" style="font-size:12px; color:var(--text-dim); margin-bottom:8px;"></div>
@@ -2398,13 +2403,17 @@ function recomputeArResult(){
   const rawCount = heightMm / thicknessMm;
   const roundedCount = Math.round(rawCount);
 
-  window._arLastCalc = { pxHeight, heightMm, thicknessMm, rawCount, roundedCount };
+  const biasCorrection = parseFloat(document.getElementById('ar-bias-correction')?.value) || 0;
+  const finalCount = Math.max(0, roundedCount + biasCorrection);
+
+  window._arLastCalc = { pxHeight, heightMm, thicknessMm, rawCount, roundedCount: finalCount };
   document.getElementById('arCalcResult').innerHTML =
     `較正(基準チップから直接算出): ${arPxPerMm.toFixed(2)}px/mm<br>` +
     `タップ間の高さ: ${pxHeight.toFixed(1)}px → ${rawHeightMm.toFixed(2)}mm(${tiltNote})<br>` +
     `補正後の高さ: ${heightMm.toFixed(2)}mm<br>` +
     `使用する1枚厚み: ${thicknessMm.toFixed(4)}mm(${source})<br>` +
-    `${heightMm.toFixed(2)}mm ÷ ${thicknessMm.toFixed(4)}mm = <b>${rawCount.toFixed(2)}枚</b> → 採用値: ${roundedCount}枚`;
+    `${heightMm.toFixed(2)}mm ÷ ${thicknessMm.toFixed(4)}mm = ${rawCount.toFixed(2)}枚(生値: ${roundedCount}枚)<br>` +
+    `経験的バイアス補正(${biasCorrection >= 0 ? '+' : ''}${biasCorrection}枚): → <b>採用値: ${finalCount}枚</b>`;
 }
 
 function redrawArOverlay(){
