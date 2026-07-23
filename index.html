@@ -394,15 +394,17 @@
       <input type="checkbox" id="arTiltCorrectionToggle" style="width:auto;" checked>
       📐 傾き補正を有効にする(過剰補正の疑いがある場合はチェックを外して比較してください)
     </label>
-    <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:13px; color:var(--text-dim);">
-      <input type="checkbox" id="arEmpiricalCorrectionToggle" style="width:auto;" checked>
-      📊 実測データに基づく追加補正を使う(A/Bテストの実測値から角度別に補正)
+    <label style="display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:13px; color:var(--text-dim);">
+      <input type="checkbox" id="arEmpiricalCorrectionToggle" style="width:auto;">
+      📊 実測データに基づく追加補正を使う(⚠️非推奨: 別セッションのデータでは傾向が逆転することが確認されたため、デフォルト無効)
     </label>
+    <div class="hint" style="margin-bottom:10px; color:var(--danger);">⚠️ 角度だけに基づく補正は、別のテストセッションで傾向が反転することが実測で確認されました(角度以外の要因の影響が大きいため)。この補正は参考・検証目的でのみオンにしてください。</div>
     <div class="row2" style="margin-bottom:10px;">
       <span style="width:140px; flex:none; font-size:13px;">経験的バイアス補正</span>
-      <input type="text" inputmode="numeric" id="ar-bias-correction" placeholder="例: -2" value="-2">
+      <input type="text" inputmode="numeric" id="ar-bias-correction" placeholder="例: -2" value="0">
       <span style="font-size:11px; color:var(--text-dim); flex:none;">枚(最終結果から差し引く)</span>
     </div>
+    <div class="hint" style="margin-bottom:10px;">まずは補正を全てオフにして生の精度を確認することを推奨します。生の精度自体はどの程度でしたか、次に確認してください。</div>
     <div class="hint" style="margin-bottom:8px;" id="arTapInstruction">① 立てた基準チップの束の側面「内側」(輪郭がぼやけた縁ではなく、面がはっきり見える部分)を2回タップしてください。</div>
     <div class="hint" style="margin-bottom:8px; color:var(--gold);">💡コツ: 基準チップは縁のボケた輪郭を避け側面の内側をタップ。スタックの高さは一番上のチップの「上辺」→一番下のチップの「下辺」を、外枠に沿ってタップすると精度が上がります。</div>
     <div id="arCalibDataList" style="font-size:12px; color:var(--text-dim); margin-bottom:8px;"></div>
